@@ -5,6 +5,7 @@ const AuthRouter = require("./src/route/authRouter");
 const AppError = require("./utils/app-error");
 const ClassRouter = require("./src/route/classRouter");
 const lectureRouter = require("./src/route/lectureRouter");
+const webhookRouter = require("./src/route/webhookRouter");
 
 const app = express();
 app.use(cors());
@@ -18,6 +19,7 @@ app.use((req, res, next) => {
 app.use("/api/v1/auth", AuthRouter);
 app.use("/api/v1/classes", ClassRouter);
 app.use("/api/v1/lectures", lectureRouter);
+app.use("/", webhookRouter);
 
 // Catch-all for 404
 
