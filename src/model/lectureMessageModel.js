@@ -9,7 +9,13 @@ const lectureMessageSchema = new mongoose.Schema(
       required: true,
     },
     waMessageId: { type: String, required: true, unique: true }, // WhatsApp message id
-    recipient: { type: String }, // lecturer phone number, optional
+    recipient: { type: String }, // lecturer phone number
+    type: {
+      type: String,
+      enum: ["notification", "followup"],
+      default: "notification",
+    },
+    buttonId: { type: String }, // e.g. add_note_123
     deliveredAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

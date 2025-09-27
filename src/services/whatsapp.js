@@ -3,7 +3,9 @@ const dotenv = require("dotenv");
 dotenv.config();
 const axios = require("axios");
 const Class = require("../model/classModel");
+const Lecture = require("../model/lectureModel");
 const LectureMessage = require("../model/lectureMessageModel");
+const PendingAction = require("../model/pendingActionModel");
 const AppError = require("../../utils/app-error");
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
@@ -328,12 +330,13 @@ async function sendLecturerClassNotification({
 
     return response.data;
   } catch (err) {
+    console.log(err.response);
     console.error("❌ sendLecturerClassNotification error:", err.message);
     throw err; // rethrow so caller (controller) can catch it
   }
 }
 
-async function sendStudentClassNotification({
+async function sendStudentClassConfirmed({
   to,
   studentName,
   status, // e.g. "Confirmed ✅" or "Cancelled ❌"
@@ -351,14 +354,13 @@ async function sendStudentClassNotification({
       to: formattedTo,
       type: "template",
       template: {
-        name: "student_class_notification",
+        name: "student_class_notification_confirmed",
         language: { code: "en_US" },
         components: [
           {
             type: "body",
             parameters: [
               { type: "text", text: studentName }, // {{1}}
-              { type: "text", text: status }, // {{2}}
               { type: "text", text: course }, // {{3}}
               { type: "text", text: lecturerName }, // {{4}}
               { type: "text", text: startTime }, // {{5}}
@@ -397,17 +399,294 @@ async function sendStudentClassNotification({
 
     return response.data;
   } catch (err) {
-    console.error("❌ sendStudentClassNotification error:", err.message);
+    console.error("❌ sendStudentClassConfirmed error:", err.message);
     throw new AppError("Failed to send student class notification", 500);
+  }
+}
+async function sendStudentClassCancelled({
+  to,
+  studentName,
+  course,
+  lecturerName,
+  startTime,
+  endTime,
+  location,
+}) {
+  try {
+    const formattedTo = formatPhoneNumber(to);
+
+    const payload = {
+      messaging_product: "whatsapp",
+      to: formattedTo,
+      type: "template",
+      template: {
+        name: "template_name_student_class_notification_cancelled",
+        language: { code: "en_US" },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: studentName }, // {{1}}
+              { type: "text", text: course }, // {{2}}
+              { type: "text", text: lecturerName }, // {{3}}
+              { type: "text", text: startTime }, // {{4}}
+              { type: "text", text: endTime }, // {{5}}
+              { type: "text", text: location }, // {{6}}
+            ],
+          },
+          {
+            type: "button",
+            sub_type: "quick_reply",
+            index: "0",
+            parameters: [{ type: "payload", payload: "GOT_IT" }],
+          },
+          {
+            type: "button",
+            sub_type: "quick_reply",
+            index: "1",
+            parameters: [{ type: "payload", payload: "NEED_HELP" }],
+          },
+        ],
+      },
+    };
+
+    const response = await axios.post(WHATSAPP_API_URL, payload, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    return response.data;
+  } catch (err) {
+    console.log(err.response);
+    console.error("❌ sendStudentClassCancelled error:", err.message);
+    throw new AppError("Failed to send student class cancellation notice", 500);
+  }
+}
+
+async function sendStudentClassRescheduled({
+  to,
+  studentName,
+  course,
+  lecturerName,
+  newDate,
+  startTime,
+  endTime,
+  location,
+  note,
+}) {
+  try {
+    const formattedTo = formatPhoneNumber(to);
+
+    const payload = {
+      messaging_product: "whatsapp",
+      to: formattedTo,
+      type: "template",
+      template: {
+        name: "student_class_notification_rescheduled",
+        language: { code: "en_US" },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: studentName }, // {{1}}
+              { type: "text", text: course }, // {{2}}
+              { type: "text", text: lecturerName }, // {{3}}
+              { type: "text", text: newDate }, // {{4}}
+              { type: "text", text: startTime }, // {{5}}
+              { type: "text", text: endTime }, // {{6}}
+              { type: "text", text: location }, // {{7}}
+              { type: "text", text: note || "No additional notes." }, // {{8}}
+            ],
+          },
+        ],
+      },
+    };
+
+    const response = await axios.post(WHATSAPP_API_URL, payload, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    return response.data;
+  } catch (err) {
+    console.error("❌ sendStudentClassRescheduled error:", err.message);
+    throw new AppError(
+      "Failed to send student class reschedule notification",
+      500
+    );
+  }
+}
+
+// services/whatsapp.js (or similar)
+async function sendLecturerFollowUp({ to, lectureId }) {
+  console.log("➡️ sendLecturerFollowUp called", { to, lectureId });
+  if (!to) {
+    console.error("✋ sendLecturerFollowUp: missing 'to' phone number");
+    throw new Error("Missing recipient phone number");
+  }
+  if (!process.env.WHATSAPP_PHONE_ID) {
+    console.error("✋ WHATSAPP_PHONE_ID is not set");
+  }
+  console.log("WHATSAPP_API_URL:", WHATSAPP_API_URL);
+
+  const formattedTo = (() => {
+    try {
+      return formatPhoneNumber(to);
+    } catch (e) {
+      console.error("✋ formatPhoneNumber error:", e.message);
+      throw e;
+    }
+  })();
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: formattedTo,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "Would you like to add anything for the students?" },
+      action: {
+        buttons: [
+          {
+            type: "reply",
+            reply: { id: `add_note_${lectureId}`, title: "➕ Add Note" },
+          },
+          {
+            type: "reply",
+            reply: {
+              id: `add_document_${lectureId}`,
+              title: "📄 Add Document",
+            },
+          },
+          {
+            type: "reply",
+            reply: { id: `no_more_${lectureId}`, title: "❌ No" },
+          },
+        ],
+      },
+    },
+  };
+
+  try {
+    const response = await axios.post(WHATSAPP_API_URL, payload, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 15000,
+    });
+
+    const waMessageId = response?.data?.messages?.[0]?.id;
+    if (waMessageId) {
+      // create LectureMessage for mapping (like you already did)
+      await LectureMessage.create({
+        lectureId,
+        waMessageId,
+        recipient: formattedTo,
+        type: "followup",
+      });
+
+      // create a PendingAction to indicate we are awaiting the lecturer's choice/input
+      // include lecturer (if available) for easier matching later
+      try {
+        const lecture = await Lecture.findById(lectureId).select(
+          "lecturer lecturerWhatsapp"
+        );
+        let pendingPayload = {
+          lecture: lectureId,
+          action: "awaiting_choice", // initial state
+          waMessageId,
+          status: "pending",
+        };
+
+        // avoid duplicate pending actions for same waMessageId
+        const exists = await PendingAction.findOne({ waMessageId });
+        if (!exists) {
+          await PendingAction.create(pendingPayload);
+          console.log(
+            "🕒 PendingAction created (awaiting_choice) for follow-up:",
+            waMessageId
+          );
+        } else {
+          console.log(
+            "ℹ️ PendingAction already exists for waMessageId:",
+            waMessageId
+          );
+        }
+      } catch (e) {
+        console.error("❌ Failed to create PendingAction:", e);
+        // non-fatal — continue
+      }
+    }
+
+    console.log(
+      "✅ Follow-up sent. response.data:",
+      JSON.stringify(response.data, null, 2)
+    );
+    return response.data;
+  } catch (err) {
+    console.error("❌ sendLecturerFollowUp - request failed");
+    if (err.response) {
+      console.error("Status:", err.response.status);
+      console.error("Headers:", err.response.headers);
+      console.error("Body:", JSON.stringify(err.response.data, null, 2));
+    } else {
+      console.error("Error message:", err.message);
+    }
+    console.error("Full error stack:", err.stack);
+    throw err;
+  }
+}
+
+/**
+ * Send plain text WhatsApp message (wrapper for lecturer responses)
+ */
+async function sendWhatsAppText({ to, text }) {
+  const formattedTo = formatPhoneNumber(to);
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to: formattedTo,
+    type: "text",
+    text: { body: text },
+  };
+
+  try {
+    const response = await axios.post(WHATSAPP_API_URL, payload, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+    console.log("✅ WhatsApp text sent:", response.data);
+    return response.data;
+  } catch (err) {
+    console.error(
+      "❌ sendWhatsAppText error:",
+      err.response?.data || err.message
+    );
+    throw new AppError(
+      err.response?.data?.error?.message || "Failed to send WhatsApp text",
+      500
+    );
   }
 }
 
 module.exports = {
   sendWhatsAppMessage,
+  sendWhatsAppText,
   sendAuthOtpTemplate,
   getTemplates,
   sendWelcomeTemplate,
   sendLecturerWelcomeTemplate,
   sendLecturerClassNotification,
-  sendStudentClassNotification,
+  sendStudentClassConfirmed,
+  sendStudentClassCancelled,
+  sendStudentClassRescheduled,
+  sendLecturerFollowUp,
 };

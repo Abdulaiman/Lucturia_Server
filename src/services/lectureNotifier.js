@@ -5,7 +5,7 @@ const dayjs = require("dayjs"); // optional, for date manipulation
 
 // Schedule daily at 8 PM
 const lectureNotifierJob = cron.schedule(
-  "44 15 * * *",
+  "03 18 * * *",
   async () => {
     try {
       console.log("📤 Running lecture notification job...");
@@ -18,7 +18,6 @@ const lectureNotifierJob = cron.schedule(
       const lectures = await Lecture.find({
         startTime: { $gte: tomorrowStart, $lte: tomorrowEnd },
       });
-
       for (const lecture of lectures) {
         if (!lecture.lecturerWhatsapp) continue;
 
