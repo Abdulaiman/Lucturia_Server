@@ -187,8 +187,6 @@ async function handleLecturerContribution(message) {
   const waMessageId = message.id;
   let content = null;
   const type = message.type;
-  console.log(waId);
-  console.log(message);
 
   // convert incoming number to local 11-digit format
   if (waId.startsWith("234") && waId.length === 13) {

@@ -399,15 +399,6 @@ async function sendStudentClassConfirmed({
   location,
 }) {
   try {
-    console.log({
-      to,
-      studentName,
-      course,
-      lecturerName,
-      startTime,
-      endTime,
-      location,
-    });
     const formattedTo = formatPhoneNumber(to);
 
     const payload = {
@@ -460,7 +451,7 @@ async function sendStudentClassConfirmed({
 
     return response.data;
   } catch (err) {
-    console.log(err);
+    d;
     console.error("❌ sendStudentClassConfirmed error:", err.message);
     throw new AppError("Failed to send student class notification", 500);
   }
@@ -475,15 +466,6 @@ async function sendStudentClassCancelled({
   location,
 }) {
   try {
-    console.log({
-      to,
-      studentName,
-      course,
-      lecturerName,
-      startTime,
-      endTime,
-      location,
-    });
     const formattedTo = formatPhoneNumber(to);
 
     const payload = {
@@ -801,9 +783,7 @@ async function notifyStudentsOfContribution(lecture, action, content) {
   const students = await User.find({ class: lecture.class }).select(
     "whatsappNumber fullName"
   );
-  console.log(students);
-  console.log(action);
-  console.log(content);
+
   for (const student of students) {
     if (action === "add_note") {
       await sendWhatsAppText({
