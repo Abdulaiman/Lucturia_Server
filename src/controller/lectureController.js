@@ -1,9 +1,16 @@
 // controllers/lectureController.js
 const Lecture = require("../model/lectureModel");
 const Class = require("../model/classModel");
+const User = require("../model/userModel");
 const catchAsync = require("../../utils/catch-async"); // adapt to your helper
 const AppError = require("../../utils/app-error");
-const { sendLecturerWelcomeTemplate } = require("../services/whatsapp");
+const {
+  sendLecturerWelcomeTemplate,
+  sendStudentClassCancelled,
+  sendStudentClassRescheduled,
+  sendStudentClassConfirmed,
+} = require("../services/whatsapp");
+const { getFirstName } = require("../../utils/helpers");
 
 exports.createLecture = catchAsync(async (req, res, next) => {
   const {
@@ -157,12 +164,142 @@ exports.getLectureById = catchAsync(async (req, res, next) => {
 
 // Update lecture
 exports.updateLecture = catchAsync(async (req, res, next) => {
-  const lecture = await Lecture.findByIdAndUpdate(req.params.id, req.body, {
-    new: true,
-    runValidators: true,
-  });
+  const lecture = await Lecture.findById(req.params.id);
   if (!lecture) return next(new AppError("Lecture not found", 404));
-  res.status(200).json({ status: "success", data: lecture });
+
+  // Store old values for comparison
+  const oldStart = new Date(lecture.startTime);
+  const oldEnd = new Date(lecture.endTime);
+  const oldLocation = lecture.location;
+  const oldStatus = lecture.status;
+
+  // Apply incoming changes
+  Object.assign(lecture, req.body);
+
+  const newStart = new Date(lecture.startTime);
+  const newEnd = new Date(lecture.endTime);
+  const newLocation = lecture.location;
+  const newStatus = lecture.status;
+
+  // Extract dates
+  const oldDate = oldStart.toISOString().split("T")[0];
+  const newDate = newStart.toISOString().split("T")[0];
+
+  // Extract times
+  const oldStartTime = oldStart.toTimeString().slice(0, 5);
+  const newStartTime = newStart.toTimeString().slice(0, 5);
+  const oldEndTime = oldEnd.toTimeString().slice(0, 5);
+  const newEndTime = newEnd.toTimeString().slice(0, 5);
+
+  let effectiveStatus = newStatus;
+
+  // ✅ Case 1: If date OR time changed → always Rescheduled
+  const dateChanged = oldDate !== newDate;
+  const timeChanged =
+    oldStartTime !== newStartTime || oldEndTime !== newEndTime;
+
+  if (dateChanged || timeChanged) {
+    effectiveStatus = "Rescheduled";
+  }
+  // ✅ Case 2: If only status changed (manual update)
+  else if (oldStatus !== newStatus) {
+    effectiveStatus = newStatus;
+  }
+  // ✅ Case 3: If only location changed
+  else if (oldLocation !== newLocation) {
+    effectiveStatus = newStatus; // usually stays Confirmed
+  }
+  // ✅ Case 4: Nothing meaningful changed → skip notifications
+  else {
+    return res.status(200).json({
+      status: "success",
+      data: lecture,
+      message: "No significant changes detected, no notifications sent.",
+    });
+  }
+
+  // Save updated status
+  lecture.status = effectiveStatus;
+  await lecture.save();
+
+  // Notify students
+  const students = await User.find({ class: lecture.class }).select(
+    "whatsappNumber fullName"
+  );
+
+  const startTime = newStart.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const endTime = newEnd.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const lectureDate = newStart.toLocaleDateString();
+
+  for (const student of students) {
+    try {
+      if (effectiveStatus === "Cancelled") {
+        // 🔔 Cancellation
+        await sendStudentClassCancelled({
+          to: student.whatsappNumber,
+          studentName: getFirstName(student.fullName),
+          course: lecture.course,
+          lecturerName: lecture.lecturer,
+          startTime,
+          endTime,
+          location: lecture.location,
+        });
+      } else if (effectiveStatus === "Rescheduled") {
+        // 🔔 Reschedule overrides everything
+        await sendStudentClassRescheduled({
+          to: student.whatsappNumber,
+          studentName: getFirstName(student.fullName),
+          course: lecture.course,
+          lecturerName: lecture.lecturer,
+          newDate: lectureDate,
+          startTime,
+          endTime,
+          location: lecture.location,
+          note: "Rescheduled by your class rep.",
+        });
+      } else if (oldStatus !== "Confirmed" && newStatus === "Confirmed") {
+        // 🔔 Status-only change → Confirmed
+        await sendStudentClassConfirmed({
+          to: student.whatsappNumber,
+          studentName: getFirstName(student.fullName),
+          status: "Confirmed",
+          course: lecture.course,
+          lecturerName: lecture.lecturer,
+          startTime,
+          endTime,
+          location: lecture.location,
+        });
+      } else if (oldLocation !== newLocation) {
+        // 🔔 Location-only update
+        await sendStudentClassConfirmed({
+          to: student.whatsappNumber,
+          studentName: getFirstName(student.fullName),
+          status: lecture.status,
+          course: lecture.course,
+          lecturerName: lecture.lecturer,
+          startTime,
+          endTime,
+          location: lecture.location,
+        });
+      }
+    } catch (err) {
+      console.error(
+        `❌ Failed to notify ${student.fullName} (${student.whatsappNumber}):`,
+        err.message
+      );
+    }
+  }
+
+  res.status(200).json({
+    status: "success",
+    data: lecture,
+  });
 });
 
 // Delete lecture

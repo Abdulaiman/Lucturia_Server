@@ -10,6 +10,7 @@ const {
   sendStudentClassRescheduled,
   sendLecturerFollowUp,
   sendWhatsAppText,
+  notifyStudentsOfContribution,
 } = require("../services/whatsapp");
 const { getFirstName, formatTime } = require("../../utils/helpers");
 
@@ -93,6 +94,7 @@ async function handleLecturerButton(message) {
       await pending.save();
     } else {
       await PendingAction.create({
+        lecturer: lecture.lecturerWhatsapp,
         lecture: lecture._id,
         action: "add_note",
         waMessageId,
@@ -123,6 +125,7 @@ async function handleLecturerButton(message) {
       await pending.save();
     } else {
       await PendingAction.create({
+        lecturer: lecture.lecturerWhatsapp,
         lecture: lecture._id,
         action: "add_document",
         waMessageId,
@@ -143,7 +146,6 @@ async function handleLecturerButton(message) {
       status: "pending",
     });
     if (pending) {
-      pending.status = "completed";
       await pending.save();
     }
 
@@ -178,6 +180,83 @@ async function handleLecturerButton(message) {
 
     console.log(`📢 Notified ${students.length} students`);
   }
+}
+
+async function handleLecturerContribution(message) {
+  let waId = message.from; // e.g., '2348032532333'
+  const waMessageId = message.id;
+  let content = null;
+  const type = message.type;
+  console.log(waId);
+  console.log(message);
+
+  // convert incoming number to local 11-digit format
+  if (waId.startsWith("234") && waId.length === 13) {
+    waId = "0" + waId.slice(3); // '2348032532333' => '08032532333'
+  }
+
+  // find the latest pending action for this lecturer
+  const pending = await PendingAction.findOne({
+    lecturerWhatsapp: waId,
+    status: "pending",
+  })
+    .sort({ createdAt: -1 })
+    .populate("lecture");
+
+  if (!pending) {
+    console.log(
+      `⚠️ No pending action found for lecturer ${waId}, ignoring message.`
+    );
+    return;
+  }
+
+  // capture the content
+  if (type === "text") {
+    content = message.text.body;
+    console.log(`📝 Lecturer note captured: ${content}`);
+  } else if (type === "document") {
+    content = {
+      waId: message.document.id, // ✅ renamed for consistency
+      fileName: message.document.filename,
+      mimeType: message.document.mime_type,
+    };
+    console.log(`📄 Lecturer uploaded document: ${content.fileName}`);
+  } else {
+    console.log(`⚠️ Unsupported message type from lecturer: ${type}`);
+    return;
+  }
+
+  // save to lecture
+  const lecture = pending.lecture;
+  if (!lecture) {
+    console.log(`⚠️ Pending action has no linked lecture, ignoring.`);
+    return;
+  }
+
+  if (pending.action === "add_note" && type === "text") {
+    lecture.notes = lecture.notes || [];
+    lecture.notes.push({
+      text: content,
+      addedBy: waId,
+      createdAt: new Date(),
+    });
+  } else if (pending.action === "add_document" && type === "document") {
+    lecture.documents = lecture.documents || [];
+    lecture.documents.push(content); // ✅ already structured with waId/fileName/mimeType
+  }
+
+  await lecture.save();
+
+  await pending.save();
+
+  // notify students with the *same content shape* you just saved
+  await notifyStudentsOfContribution(lecture, pending.action, content);
+
+  // confirm to lecturer
+  await sendWhatsAppText({
+    to: lecture.lecturerWhatsapp,
+    text: "✅ Got it, your contribution has been shared with your students.",
+  });
 }
 
 // -----------------
@@ -240,4 +319,5 @@ async function handleLecturerReschedule(message) {
 module.exports = {
   handleLecturerButton,
   handleLecturerReschedule,
+  handleLecturerContribution,
 };

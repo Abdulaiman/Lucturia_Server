@@ -12,6 +12,7 @@ const {
 const {
   handleLecturerButton,
   handleLecturerReschedule,
+  handleLecturerContribution,
 } = require("./whatsappControllers");
 
 function getFirstName(fullName = "") {
@@ -70,7 +71,9 @@ exports.handleWebhook = async (req, res, next) => {
             await handleLecturerReschedule(message);
           }
 
-          // later: handle add_note / add_document separately
+          if (message.type === "text" || message.type === "document") {
+            await handleLecturerContribution(message);
+          }
         }
       }
     }

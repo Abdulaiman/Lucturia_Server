@@ -2,8 +2,10 @@
 const dotenv = require("dotenv");
 dotenv.config();
 const axios = require("axios");
+const FormData = require("form-data");
 const Class = require("../model/classModel");
 const Lecture = require("../model/lectureModel");
+const User = require("../model/userModel");
 const LectureMessage = require("../model/lectureMessageModel");
 const PendingAction = require("../model/pendingActionModel");
 const AppError = require("../../utils/app-error");
@@ -27,6 +29,57 @@ function formatPhoneNumber(phone) {
     throw new Error("Phone number must be Nigerian (start with 0 or 234)");
   }
   return cleaned;
+}
+
+// Helper: download file from WhatsApp servers
+async function downloadMedia(mediaId) {
+  // Step 1: Get the media URL
+  const mediaUrlRes = await axios.get(
+    `https://graph.facebook.com/v21.0/${mediaId}`,
+    {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      },
+    }
+  );
+
+  const mediaUrl = mediaUrlRes.data.url;
+
+  // Step 2: Download the file bytes
+  const fileRes = await axios.get(mediaUrl, {
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+    responseType: "arraybuffer",
+  });
+
+  return fileRes.data; // raw file buffer
+}
+
+// Helper: re-upload file to WhatsApp
+
+async function uploadMedia(fileBuffer, fileName, mimeType) {
+  const formData = new FormData();
+
+  // WhatsApp requires this param
+  formData.append("messaging_product", "whatsapp");
+
+  // The actual file
+  formData.append("file", fileBuffer, {
+    filename: fileName,
+    contentType: mimeType,
+  });
+
+  const response = await axios.post(
+    `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_ID}/media`,
+    formData,
+    {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        ...formData.getHeaders(),
+      },
+    }
+  );
+
+  return response.data.id; // ✅ mediaId for sending later
 }
 
 /**
@@ -339,7 +392,6 @@ async function sendLecturerClassNotification({
 async function sendStudentClassConfirmed({
   to,
   studentName,
-  status, // e.g. "Confirmed ✅" or "Cancelled ❌"
   course,
   lecturerName,
   startTime,
@@ -347,6 +399,15 @@ async function sendStudentClassConfirmed({
   location,
 }) {
   try {
+    console.log({
+      to,
+      studentName,
+      course,
+      lecturerName,
+      startTime,
+      endTime,
+      location,
+    });
     const formattedTo = formatPhoneNumber(to);
 
     const payload = {
@@ -399,6 +460,7 @@ async function sendStudentClassConfirmed({
 
     return response.data;
   } catch (err) {
+    console.log(err);
     console.error("❌ sendStudentClassConfirmed error:", err.message);
     throw new AppError("Failed to send student class notification", 500);
   }
@@ -413,6 +475,15 @@ async function sendStudentClassCancelled({
   location,
 }) {
   try {
+    console.log({
+      to,
+      studentName,
+      course,
+      lecturerName,
+      startTime,
+      endTime,
+      location,
+    });
     const formattedTo = formatPhoneNumber(to);
 
     const payload = {
@@ -602,6 +673,7 @@ async function sendLecturerFollowUp({ to, lectureId }) {
           action: "awaiting_choice", // initial state
           waMessageId,
           status: "pending",
+          lecturerWhatsapp: lecture.lecturerWhatsapp,
         };
 
         // avoid duplicate pending actions for same waMessageId
@@ -677,6 +749,81 @@ async function sendWhatsAppText({ to, text }) {
   }
 }
 
+async function sendWhatsAppDocument({
+  to,
+  documentId,
+  filename,
+  mimeType,
+  caption,
+}) {
+  try {
+    console.log({ to, documentId, filename, mimeType });
+    const formattedTo = formatPhoneNumber(to);
+
+    // Step 1: Download lecturer’s file
+    const fileBuffer = await downloadMedia(documentId);
+
+    // Step 2: Upload to our WABA
+    const newMediaId = await uploadMedia(fileBuffer, filename, mimeType);
+    console.log("📂 Uploaded, newMediaId =", newMediaId);
+
+    // Step 3: Send to student
+    const payload = {
+      messaging_product: "whatsapp",
+      to: formattedTo,
+      type: "document",
+      document: {
+        id: newMediaId,
+        filename, // ✅ required
+        caption: caption || "", // ✅ optional
+      },
+    };
+
+    const response = await axios.post(WHATSAPP_API_URL, payload, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    console.log("✅ WhatsApp document sent:", response.data);
+    return response.data;
+  } catch (err) {
+    console.error(
+      "❌ sendWhatsAppDocument error:",
+      err.response?.data || err.message
+    );
+    throw new AppError("Failed to send WhatsApp document", 500);
+  }
+}
+
+async function notifyStudentsOfContribution(lecture, action, content) {
+  const students = await User.find({ class: lecture.class }).select(
+    "whatsappNumber fullName"
+  );
+  console.log(students);
+  console.log(action);
+  console.log(content);
+  for (const student of students) {
+    if (action === "add_note") {
+      await sendWhatsAppText({
+        to: student.whatsappNumber,
+        text: `📝 New note for *${lecture.course}* from ${lecture.lecturer}:\n\n${content}`,
+      });
+    } else if (action === "add_document") {
+      await sendWhatsAppDocument({
+        to: student.whatsappNumber,
+        documentId: content.waId, // the WhatsApp media id
+        filename: content.fileName,
+        mimeType: content.mimeType,
+        caption: `📝 New document for *${lecture.course}* from ${lecture.lecturer}`,
+      });
+    }
+  }
+
+  console.log(`📢 Shared ${action} with ${students.length} students`);
+}
+
 module.exports = {
   sendWhatsAppMessage,
   sendWhatsAppText,
@@ -689,4 +836,5 @@ module.exports = {
   sendStudentClassCancelled,
   sendStudentClassRescheduled,
   sendLecturerFollowUp,
+  notifyStudentsOfContribution,
 };
