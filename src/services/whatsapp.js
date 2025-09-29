@@ -700,24 +700,54 @@ async function sendLecturerFollowUp({ to, lectureId }) {
 /**
  * Send plain text WhatsApp message (wrapper for lecturer responses)
  */
-async function sendWhatsAppText({ to, text }) {
+async function sendWhatsAppText({ to, text, buttons }) {
   const formattedTo = formatPhoneNumber(to);
 
-  const payload = {
-    messaging_product: "whatsapp",
-    to: formattedTo,
-    type: "text",
-    text: { body: text },
-  };
-
   try {
-    const response = await axios.post(WHATSAPP_API_URL, payload, {
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    });
-    console.log("✅ WhatsApp text sent:", response.data);
+    let response;
+
+    if (buttons && buttons.length) {
+      // Interactive button message
+      const payload = {
+        messaging_product: "whatsapp",
+        to: formattedTo,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text },
+          action: {
+            buttons: buttons.map((b, idx) => ({
+              type: "reply",
+              reply: { id: b.id, title: b.title },
+            })),
+          },
+        },
+      };
+
+      response = await axios.post(WHATSAPP_API_URL, payload, {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      });
+    } else {
+      // Plain text fallback
+      const payload = {
+        messaging_product: "whatsapp",
+        to: formattedTo,
+        type: "text",
+        text: { body: text },
+      };
+
+      response = await axios.post(WHATSAPP_API_URL, payload, {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
+    console.log("✅ WhatsApp message sent:", response.data);
     return response.data;
   } catch (err) {
     console.error(

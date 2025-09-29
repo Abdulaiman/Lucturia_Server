@@ -253,7 +253,7 @@ async function handleLecturerContribution(message) {
   // confirm to lecturer
   await sendWhatsAppText({
     to: lecture.lecturerWhatsapp,
-    text: "✅ Got it, your contribution has been shared with your students.",
+    text: "✅ Sent",
   });
 }
 
