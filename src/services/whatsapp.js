@@ -342,8 +342,6 @@ async function sendLecturerClassNotification({
     const formattedTo = formatPhoneNumber(to);
 
     // ✅ Format times in Africa/Lagos
-    const start = formatLagosTime(startTime);
-    const end = formatLagosTime(endTime);
 
     const payload = {
       messaging_product: "whatsapp",
@@ -360,8 +358,8 @@ async function sendLecturerClassNotification({
               { type: "text", text: lecturerName },
               { type: "text", text: course },
               { type: "text", text: classTitle },
-              { type: "text", text: start }, // ✅ Lagos time
-              { type: "text", text: end }, // ✅ Lagos time
+              { type: "text", text: startTime }, // ✅ Lagos time
+              { type: "text", text: endTime }, // ✅ Lagos time
               { type: "text", text: location },
             ],
           },
@@ -491,8 +489,7 @@ async function sendStudentClassCancelled({
     // ✅ Format times in Africa/Lagos
     const start = formatLagosTime(startTime);
     const end = formatLagosTime(endTime);
-    console.log(start);
-    console.log(end);
+
     const payload = {
       messaging_product: "whatsapp",
       to: formattedTo,
