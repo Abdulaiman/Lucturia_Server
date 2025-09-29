@@ -22,35 +22,14 @@ const timezone = require("dayjs/plugin/timezone");
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-// after dayjs.extend(utc) and dayjs.extend(timezone)
-
-function isHHMM(s) {
-  return typeof s === "string" && /^\d{1,2}:\d{2}$/.test(s);
-}
-
 function formatLagosTime(date) {
-  if (!date) return "TBA"; // null/undefined fallback
-  if (isHHMM(date)) return date; // already a "HH:mm" string
-
-  // Try direct parsing
-  let d = dayjs(date);
-  if (!d.isValid()) {
-    // Try JS Date as a last resort (handles some weird inputs)
-    d = dayjs(new Date(date));
-    if (!d.isValid()) return "TBA";
-  }
-
-  return d.tz("Africa/Lagos").format("HH:mm");
+  if (!date) return "TBA";
+  return dayjs(date).tz("Africa/Lagos").format("HH:mm");
 }
 
 function formatLagosDate(date) {
   if (!date) return "TBA";
-  let d = dayjs(date);
-  if (!d.isValid()) {
-    d = dayjs(new Date(date));
-    if (!d.isValid()) return "TBA";
-  }
-  return d.tz("Africa/Lagos").format("dddd, MMM D YYYY");
+  return dayjs(date).tz("Africa/Lagos").format("dddd, MMM D YYYY");
 }
 
 /**
