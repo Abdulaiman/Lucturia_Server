@@ -1,18 +1,32 @@
 const cron = require("node-cron");
 const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+const timezone = require("dayjs/plugin/timezone");
 const Lecture = require("../model/lectureModel");
 const User = require("../model/userModel");
 const { sendWhatsAppText } = require("./whatsapp"); // your helper
 const PendingAction = require("../model/pendingActionModel");
 
-// 6AM daily
+// extend dayjs
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+function formatLagosTime(date) {
+  return dayjs(date).tz("Africa/Lagos").format("HH:mm");
+}
+
+function formatLagosDate(date) {
+  return dayjs(date).tz("Africa/Lagos").format("dddd, MMM D YYYY");
+}
+
+// 6AM daily (local Africa/Lagos time)
 const studentDailySummaryJob = cron.schedule(
-  "56 10 * * *",
+  "27 16 * * *",
   async () => {
     console.log("📤 Running student daily summary job...");
 
-    const todayStart = dayjs().startOf("day").toDate();
-    const todayEnd = dayjs().endOf("day").toDate();
+    const todayStart = dayjs().tz("Africa/Lagos").startOf("day").toDate();
+    const todayEnd = dayjs().tz("Africa/Lagos").endOf("day").toDate();
 
     try {
       const students = await User.find().populate("class");
@@ -36,21 +50,15 @@ const studentDailySummaryJob = cron.schedule(
         let message = `📚 Hello ${student.fullName}, here’s your schedule for today:\n\n`;
 
         lectures.forEach((lec, i) => {
-          const start = new Date(lec.startTime).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          });
-          const end = new Date(lec.endTime).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          });
+          const start = formatLagosTime(lec.startTime);
+          const end = formatLagosTime(lec.endTime);
 
           const status = lec.status.toLowerCase();
           let statusText;
           if (status === "confirmed") statusText = "✅ Confirmed";
           else if (status === "cancelled") statusText = "❌ Cancelled";
           else if (status === "rescheduled") {
-            const newDate = new Date(lec.startTime).toLocaleDateString();
+            const newDate = formatLagosDate(lec.startTime);
             statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
           } else statusText = "⏳ Pending lecturer's response";
 

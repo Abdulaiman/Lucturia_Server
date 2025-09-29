@@ -16,7 +16,7 @@ exports.createLecture = catchAsync(async (req, res, next) => {
   const {
     course,
     lecturer,
-    lecturerWhatsapp,
+    lecturerWhatsapp, // ✅ lecturer WhatsApp number
     startTime,
     endTime,
     location,
@@ -27,6 +27,7 @@ exports.createLecture = catchAsync(async (req, res, next) => {
     weeks,
   } = req.body;
 
+  // Validate required fields
   if (!classId) return next(new AppError("classId (class) is required", 400));
   if (!course || !lecturer || !startTime || !endTime) {
     return next(
@@ -34,13 +35,8 @@ exports.createLecture = catchAsync(async (req, res, next) => {
     );
   }
 
-  // ✅ Force +1 hour (Africa/Lagos offset)
   const start = new Date(startTime);
   const end = new Date(endTime);
-
-  start.setHours(start.getHours() + 1);
-  end.setHours(end.getHours() + 1);
-
   if (end <= start) {
     return next(new AppError("endTime must be after startTime", 400));
   }
@@ -48,11 +44,13 @@ exports.createLecture = catchAsync(async (req, res, next) => {
   const occurrences = Math.max(1, repeat ? parseInt(weeks || 1, 10) : 1);
   const lectures = [];
 
+  // 🔹 Fetch class so we can use its title later
   const classDoc = await Class.findById(classId);
   if (!classDoc) {
     return next(new AppError("Class not found", 404));
   }
 
+  // Create lecture occurrences
   for (let i = 0; i < occurrences; i++) {
     const newStart = new Date(start);
     newStart.setDate(start.getDate() + i * 7);
@@ -75,21 +73,23 @@ exports.createLecture = catchAsync(async (req, res, next) => {
     lectures.push(lecture);
   }
 
+  // ✅ Send lecturer welcome template only once per lecturer
   if (lecturerWhatsapp) {
     const alreadyExists = await Lecture.exists({
       lecturerWhatsapp,
-      _id: { $ne: lectures[0]._id },
+      _id: { $ne: lectures[0]._id }, // exclude the one we just created
     });
 
     if (!alreadyExists) {
       try {
         await sendLecturerWelcomeTemplate(
           lecturerWhatsapp,
-          lecturer,
-          classDoc.title
+          lecturer, // 👈 goes into {{name}}
+          classDoc.title // 👈 now using class title instead of course
         );
       } catch (err) {
         console.error("⚠️ Failed to send lecturer welcome:", err.message);
+        // do not block lecture creation if message fails
       }
     }
   }

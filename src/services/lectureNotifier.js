@@ -1,20 +1,33 @@
 const cron = require("node-cron");
 const Lecture = require("../model/lectureModel");
-const { sendLecturerClassNotification } = require("./whatsapp"); // adapt to your WhatsApp.js
-const dayjs = require("dayjs"); // optional, for date manipulation
+const { sendLecturerClassNotification } = require("./whatsapp");
+const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+const timezone = require("dayjs/plugin/timezone");
 
-// Schedule daily at 8 PM
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+// Schedule daily at 7:30 PM Lagos time
 const lectureNotifierJob = cron.schedule(
-  "24 15 * * *", // 7:30 PM daily
+  "11 16 * * *", // 19:30 = 7:30 PM
   async () => {
     console.log("📤 Running lecture notification job...");
 
     try {
-      // Get tomorrow's start and end
-      const tomorrowStart = dayjs().add(1, "day").startOf("day").toDate();
-      const tomorrowEnd = dayjs().add(1, "day").endOf("day").toDate();
+      // 🔹 Compute tomorrow in Africa/Lagos
+      const tomorrowStart = dayjs()
+        .tz("Africa/Lagos")
+        .add(1, "day")
+        .startOf("day")
+        .toDate();
+      const tomorrowEnd = dayjs()
+        .tz("Africa/Lagos")
+        .add(1, "day")
+        .endOf("day")
+        .toDate();
 
-      // Fetch all lectures for tomorrow
+      // Fetch all lectures for tomorrow (stored in UTC, but boundaries calculated in Lagos)
       const lectures = await Lecture.find({
         startTime: { $gte: tomorrowStart, $lte: tomorrowEnd },
       });
@@ -34,14 +47,11 @@ const lectureNotifierJob = cron.schedule(
             lecturerName: lecture.lecturer,
             course: lecture.course,
             classId: lecture.class.toString(),
-            startTime: lecture.startTime.toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
-            endTime: lecture.endTime.toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
+            // Format times in Africa/Lagos
+            startTime: dayjs(lecture.startTime)
+              .tz("Africa/Lagos")
+              .format("HH:mm"),
+            endTime: dayjs(lecture.endTime).tz("Africa/Lagos").format("HH:mm"),
             location: lecture.location || "TBA",
             lectureId: lecture.id,
           });
@@ -59,8 +69,8 @@ const lectureNotifierJob = cron.schedule(
     }
   },
   {
-    scheduled: true, // starts automatically
-    timezone: "Africa/Lagos", // explicit timezone
+    scheduled: true,
+    timezone: "Africa/Lagos", // cron itself runs in Lagos timezone
   }
 );
 

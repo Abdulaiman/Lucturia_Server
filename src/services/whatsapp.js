@@ -16,6 +16,19 @@ const WABA_ID = process.env.WABA_ID;
 const WHATSAPP_API_URL = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_ID}/messages`;
 const TEMPLATE_API_URL = `https://graph.facebook.com/v21.0/${WABA_ID}/message_templates`;
 
+const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+const timezone = require("dayjs/plugin/timezone");
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+function formatLagosTime(date) {
+  return dayjs(date).tz("Africa/Lagos").format("HH:mm");
+}
+function formatLagosDate(date) {
+  return dayjs(date).tz("Africa/Lagos").format("dddd, MMM D YYYY");
+}
+
 /**
  * Format phone number to international format (Nigeria only)
  */
@@ -328,6 +341,10 @@ async function sendLecturerClassNotification({
     const classTitle = classDoc.title;
     const formattedTo = formatPhoneNumber(to);
 
+    // ✅ Format times in Africa/Lagos
+    const start = formatLagosTime(startTime);
+    const end = formatLagosTime(endTime);
+
     const payload = {
       messaging_product: "whatsapp",
       to: formattedTo,
@@ -343,8 +360,8 @@ async function sendLecturerClassNotification({
               { type: "text", text: lecturerName },
               { type: "text", text: course },
               { type: "text", text: classTitle },
-              { type: "text", text: startTime },
-              { type: "text", text: endTime },
+              { type: "text", text: start }, // ✅ Lagos time
+              { type: "text", text: end }, // ✅ Lagos time
               { type: "text", text: location },
             ],
           },
@@ -365,13 +382,12 @@ async function sendLecturerClassNotification({
     // ✅ Save to LectureMessage collection
     if (response?.data?.messages?.[0]?.id) {
       try {
-        const lectureMsg = await LectureMessage.create({
+        await LectureMessage.create({
           lectureId,
           waMessageId: response.data.messages[0].id,
           recipient: formattedTo,
         });
       } catch (dbErr) {
-        // optional: throw so you know it failed, or just log and continue
         throw new AppError("Could not save lecture message", 500);
       }
     } else {
@@ -401,6 +417,10 @@ async function sendStudentClassConfirmed({
   try {
     const formattedTo = formatPhoneNumber(to);
 
+    // ✅ Format times in Africa/Lagos
+    const start = formatLagosTime(startTime);
+    const end = formatLagosTime(endTime);
+
     const payload = {
       messaging_product: "whatsapp",
       to: formattedTo,
@@ -415,8 +435,8 @@ async function sendStudentClassConfirmed({
               { type: "text", text: studentName }, // {{1}}
               { type: "text", text: course }, // {{3}}
               { type: "text", text: lecturerName }, // {{4}}
-              { type: "text", text: startTime }, // {{5}}
-              { type: "text", text: endTime }, // {{6}}
+              { type: "text", text: start }, // ✅ {{5}} Lagos time
+              { type: "text", text: end }, // ✅ {{6}} Lagos time
               { type: "text", text: location }, // {{7}}
             ],
           },
@@ -451,11 +471,11 @@ async function sendStudentClassConfirmed({
 
     return response.data;
   } catch (err) {
-    d;
     console.error("❌ sendStudentClassConfirmed error:", err.message);
     throw new AppError("Failed to send student class notification", 500);
   }
 }
+
 async function sendStudentClassCancelled({
   to,
   studentName,
@@ -468,6 +488,11 @@ async function sendStudentClassCancelled({
   try {
     const formattedTo = formatPhoneNumber(to);
 
+    // ✅ Format times in Africa/Lagos
+    const start = formatLagosTime(startTime);
+    const end = formatLagosTime(endTime);
+    console.log(start);
+    console.log(end);
     const payload = {
       messaging_product: "whatsapp",
       to: formattedTo,
@@ -482,8 +507,8 @@ async function sendStudentClassCancelled({
               { type: "text", text: studentName }, // {{1}}
               { type: "text", text: course }, // {{2}}
               { type: "text", text: lecturerName }, // {{3}}
-              { type: "text", text: startTime }, // {{4}}
-              { type: "text", text: endTime }, // {{5}}
+              { type: "text", text: start }, // ✅ {{4}} Lagos time
+              { type: "text", text: end }, // ✅ {{5}} Lagos time
               { type: "text", text: location }, // {{6}}
             ],
           },
@@ -532,6 +557,11 @@ async function sendStudentClassRescheduled({
   try {
     const formattedTo = formatPhoneNumber(to);
 
+    // ✅ Format date & times in Africa/Lagos
+    const date = formatLagosDate(newDate);
+    const start = formatLagosTime(startTime);
+    const end = formatLagosTime(endTime);
+
     const payload = {
       messaging_product: "whatsapp",
       to: formattedTo,
@@ -546,9 +576,9 @@ async function sendStudentClassRescheduled({
               { type: "text", text: studentName }, // {{1}}
               { type: "text", text: course }, // {{2}}
               { type: "text", text: lecturerName }, // {{3}}
-              { type: "text", text: newDate }, // {{4}}
-              { type: "text", text: startTime }, // {{5}}
-              { type: "text", text: endTime }, // {{6}}
+              { type: "text", text: date }, // ✅ {{4}} Lagos date
+              { type: "text", text: start }, // ✅ {{5}} Lagos time
+              { type: "text", text: end }, // ✅ {{6}} Lagos time
               { type: "text", text: location }, // {{7}}
               { type: "text", text: note || "No additional notes." }, // {{8}}
             ],
