@@ -5,7 +5,7 @@ const dayjs = require("dayjs"); // optional, for date manipulation
 
 // Schedule daily at 8 PM
 const lectureNotifierJob = cron.schedule(
-  "33 14 * * *", // 7:30 PM daily
+  "47 14 * * *", // 7:30 PM daily
   async () => {
     console.log("📤 Running lecture notification job...");
 
