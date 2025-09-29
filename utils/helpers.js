@@ -1,5 +1,10 @@
 // utils/helpers.js
+const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+const timezone = require("dayjs/plugin/timezone");
 
+dayjs.extend(utc);
+dayjs.extend(timezone);
 /**
  * ✅ Format a phone number to E.164 standard
  * Removes leading 0, ensures + country code
@@ -44,14 +49,10 @@ function getFirstName(fullName = "") {
 /**
  * ✅ Format time nicely (e.g. "14:30" -> "2:30 PM")
  */
+
 function formatTime(date) {
   if (!date) return "";
-  const d = new Date(date);
-  return d.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  return dayjs(date).tz("Africa/Lagos").format("h:mm A");
 }
 
 /**
