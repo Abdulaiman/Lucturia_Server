@@ -21,7 +21,7 @@ function formatLagosDate(date) {
 
 // 6AM daily (local Africa/Lagos time)
 const studentDailySummaryJob = cron.schedule(
-  "27 16 * * *",
+  "55 16 * * *",
   async () => {
     console.log("📤 Running student daily summary job...");
 
