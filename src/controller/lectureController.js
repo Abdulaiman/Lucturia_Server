@@ -12,6 +12,20 @@ const {
 } = require("../services/whatsapp");
 const { getFirstName } = require("../../utils/helpers");
 
+const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+const timezone = require("dayjs/plugin/timezone");
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const {
+  sendWhatsAppText,
+  sendLecturerReminderTemplate,
+} = require("../services/whatsapp");
+
+function formatLagosTime(date) {
+  return dayjs(date).tz("Africa/Lagos").format("HH:mm");
+}
 exports.createLecture = catchAsync(async (req, res, next) => {
   const {
     course,
@@ -315,4 +329,94 @@ exports.deleteLecture = catchAsync(async (req, res, next) => {
   const lecture = await Lecture.findByIdAndDelete(req.params.id);
   if (!lecture) return next(new AppError("Lecture not found", 404));
   res.status(204).json({ status: "success", data: null });
+});
+
+exports.remindLecturer = catchAsync(async (req, res, next) => {
+  const lectureId = req.params.id;
+  const mode = "template";
+
+  const lecture = await Lecture.findById(lectureId);
+  if (!lecture) return next(new AppError("Lecture not found", 404));
+
+  // Enforce one reminder per lecture
+  if (lecture.reminder?.sent) {
+    return next(new AppError("Reminder already sent for this lecture", 409));
+  }
+
+  // Guard: only allow for lectures scheduled today (Africa/Lagos)
+  const isToday = dayjs(lecture.startTime)
+    .tz("Africa/Lagos")
+    .isSame(dayjs().tz("Africa/Lagos"), "day");
+  if (!isToday) {
+    return next(
+      new AppError("Reminders can only be sent for today's lectures", 400)
+    );
+  }
+
+  const classDoc = await Class.findById(lecture.class);
+  if (!classDoc) return next(new AppError("Class not found for lecture", 404));
+
+  const lecturerWhatsapp = lecture.lecturerWhatsapp;
+  if (!lecturerWhatsapp)
+    return next(new AppError("Lecturer WhatsApp not set", 400));
+
+  const startTime = formatLagosTime(lecture.startTime);
+  const endTime = formatLagosTime(lecture.endTime);
+  const classTitle = classDoc.title;
+
+  let delivery = null;
+
+  // Try session message if explicitly requested
+  if (mode === "session") {
+    try {
+      await sendWhatsAppText({
+        to: lecturerWhatsapp,
+        text: `⏰ Reminder: students for ${lecture.course} are awaiting your response. Please confirm or reschedule.`,
+        buttons: [
+          { id: "yes", title: "✅ Yes" },
+          { id: "no", title: "❌ No" },
+          { id: "reschedule", title: "📅 Reschedule" },
+        ],
+      });
+      delivery = "session";
+    } catch (e) {
+      // fall back to template below
+    }
+  }
+
+  // If session not used or failed, send template (outside window)
+  if (!delivery && (mode === "template" || mode === "auto")) {
+    await sendLecturerReminderTemplate({
+      to: lecturerWhatsapp,
+      lecturerName: lecture.lecturer,
+      course: lecture.course,
+      classTitle,
+      startTime,
+      endTime,
+      location: lecture.location,
+    });
+    delivery = "template";
+  }
+
+  if (!delivery) {
+    return next(
+      new AppError(
+        "Failed to send reminder (session blocked and template disabled)",
+        500
+      )
+    );
+  }
+
+  // Mark reminder as sent after successful delivery
+  lecture.reminder = {
+    sent: true,
+    sentAt: new Date(),
+    sentVia: delivery,
+  };
+  await lecture.save();
+
+  return res.status(200).json({
+    status: "success",
+    data: { lectureId, delivery },
+  });
 });

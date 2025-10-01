@@ -6,6 +6,7 @@ const {
   getLectureById,
   updateLecture,
   deleteLecture,
+  remindLecturer,
 } = require("../controller/lectureController");
 
 const router = express.Router();
@@ -27,5 +28,7 @@ router.patch("/:id", updateLecture);
 
 // Delete lecture by ID
 router.delete("/:id", deleteLecture);
+
+router.post("/remind/:id", remindLecturer);
 
 module.exports = router;

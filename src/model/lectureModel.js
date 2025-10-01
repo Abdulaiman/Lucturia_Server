@@ -1,13 +1,13 @@
-// models/Lecture.js
+// model/lectureModel.js (extend your existing schema)
 const mongoose = require("mongoose");
 
 const documentSchema = new mongoose.Schema(
   {
-    fileName: String, // WhatsApp filename
-    mimeType: String, // application/pdf, pptx, etc
-    waId: String, // WhatsApp media ID (to fetch/download later)
-    sha256: String, // optional hash
-    url: String, // if you later fetch and store
+    fileName: String,
+    mimeType: String,
+    waId: String,
+    sha256: String,
+    url: String,
   },
   { _id: false }
 );
@@ -15,8 +15,21 @@ const documentSchema = new mongoose.Schema(
 const noteSchema = new mongoose.Schema(
   {
     text: { type: String, required: true },
-    addedBy: { type: String }, // lecturer number
+    addedBy: { type: String },
     createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const reminderSchema = new mongoose.Schema(
+  {
+    sent: { type: Boolean, default: false },
+    sentAt: { type: Date },
+    sentVia: {
+      type: String,
+      enum: ["session", "template", null],
+      default: "template",
+    },
   },
   { _id: false }
 );
@@ -44,12 +57,13 @@ const lectureSchema = new mongoose.Schema(
     location: { type: String },
     description: { type: String },
     documents: [documentSchema],
-    notes: [noteSchema], // ✅ fixed: structured notes
+    notes: [noteSchema],
     class: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Class",
       required: true,
     },
+    reminder: { type: reminderSchema, default: () => ({}) }, // <-- NEW
   },
   { timestamps: true }
 );

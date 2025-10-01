@@ -13,6 +13,7 @@ const {
   handleLecturerButton,
   handleLecturerReschedule,
   handleLecturerContribution,
+  handleStudentKeywordSummary,
 } = require("./whatsappControllers");
 
 function getFirstName(fullName = "") {
@@ -56,6 +57,17 @@ exports.handleWebhook = async (req, res, next) => {
 
         for (const message of change.value.messages) {
           console.log(message);
+
+          // 0) Student keyword: "summary" (case-insensitive)
+          if (message.type === "text") {
+            const bodyText = (message.text?.body || "").trim().toLowerCase();
+            if (bodyText.includes("summary")) {
+              await handleStudentKeywordSummary(message);
+              continue; // short-circuit so lecturer handlers don't run
+            }
+          }
+
+          // 1) Lecturer buttons (yes/no/reschedule and follow-ups)
           if (
             message.type === "button" ||
             (message.type === "interactive" &&
@@ -64,6 +76,7 @@ exports.handleWebhook = async (req, res, next) => {
             await handleLecturerButton(message);
           }
 
+          // 2) Lecturer reschedule flow (NFM reply)
           if (
             message.type === "interactive" &&
             message.interactive?.type === "nfm_reply"
@@ -71,6 +84,7 @@ exports.handleWebhook = async (req, res, next) => {
             await handleLecturerReschedule(message);
           }
 
+          // 3) Lecturer contribution (text/doc)
           if (message.type === "text" || message.type === "document") {
             await handleLecturerContribution(message);
           }

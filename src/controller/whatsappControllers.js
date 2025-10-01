@@ -14,6 +14,28 @@ const {
 } = require("../services/whatsapp");
 const { getFirstName, formatTime } = require("../../utils/helpers");
 
+const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+const timezone = require("dayjs/plugin/timezone");
+
+// extend dayjs
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+function formatLagosTime(date) {
+  return dayjs(date).tz("Africa/Lagos").format("HH:mm");
+}
+
+function formatLagosDate(date) {
+  return dayjs(date).tz("Africa/Lagos").format("dddd, MMM D YYYY");
+}
+
+function toLocalMsisdn(waId) {
+  return waId?.startsWith("234") && waId.length === 13
+    ? "0" + waId.slice(3)
+    : waId;
+}
+
 // ✅ Handle button replies from lecturers
 async function handleLecturerButton(message) {
   // --- normalize reply text ---
@@ -314,8 +336,68 @@ async function handleLecturerReschedule(message) {
   console.log(`📢 Notified ${students.length} students of reschedule`);
 }
 
+async function handleStudentKeywordSummary(message) {
+  const waId = message.from; // e.g. "23480..."
+  const local = toLocalMsisdn(waId);
+
+  const student = await User.findOne({ whatsappNumber: local }).populate(
+    "class"
+  );
+  if (!student || !student.class) {
+    // Optional: send a friendly fallback or ignore
+    return;
+  }
+
+  const todayStart = dayjs().tz("Africa/Lagos").startOf("day").toDate();
+  const todayEnd = dayjs().tz("Africa/Lagos").endOf("day").toDate();
+
+  const lectures = await Lecture.find({
+    class: student.class._id,
+    startTime: { $gte: todayStart, $lte: todayEnd },
+  });
+
+  if (!lectures.length) {
+    await sendWhatsAppText({
+      to: student.whatsappNumber,
+      text: `📌 Hi ${student.fullName}, you have no lectures today!`,
+    });
+    return;
+  }
+
+  let messageOut = `📚 Hello ${
+    student.fullName
+  }, here’s your schedule for ${formatLagosDate(new Date())}:\n\n`;
+
+  lectures.forEach((lec, i) => {
+    const start = formatLagosTime(lec.startTime);
+    const end = formatLagosTime(lec.endTime);
+    const status = (lec.status || "").toLowerCase();
+
+    let statusText = "⏳ Pending lecturer's response";
+    if (status === "confirmed") statusText = "✅ Confirmed";
+    else if (status === "cancelled") statusText = "❌ Cancelled";
+    else if (status === "rescheduled") {
+      const newDate = formatLagosDate(lec.startTime);
+      statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
+    }
+
+    messageOut += `${i + 1}. ${lec.course} by ${
+      lec.lecturer
+    } (${start}-${end}) - ${statusText}\n`;
+  });
+
+  messageOut += `\n🔔 Tap below to get tomorrow’s schedule automatically!`;
+
+  await sendWhatsAppText({
+    to: student.whatsappNumber,
+    text: messageOut,
+    buttons: [{ id: "remind_tomorrow", title: "🔔 Remind me tomorrow" }],
+  });
+}
+
 module.exports = {
   handleLecturerButton,
   handleLecturerReschedule,
   handleLecturerContribution,
+  handleStudentKeywordSummary,
 };

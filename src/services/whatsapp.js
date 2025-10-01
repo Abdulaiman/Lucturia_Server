@@ -809,29 +809,208 @@ async function sendWhatsAppDocument({
   }
 }
 
+// Send a text-only lecturer update using a Utility template
+async function sendLecturerUpdateNoteTemplate({
+  to,
+  course,
+  lecturerName,
+  noteText,
+}) {
+  const formattedTo = formatPhoneNumber(to);
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: formattedTo,
+    type: "template",
+    template: {
+      name: "lecturer_updates",
+      language: { code: "en_US" },
+      components: [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: course }, // {{1}}
+            { type: "text", text: lecturerName }, // {{2}}
+            { type: "text", text: noteText }, // {{3}}
+          ],
+        },
+        // Optionally add button components here if your template defines them
+      ],
+    },
+  };
+
+  const resp = await axios.post(WHATSAPP_API_URL, payload, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+  });
+  return resp.data;
+}
+
+// async function notifyStudentsOfContribution(lecture, action, content) {
+//   const students = await User.find({ class: lecture.class }).select(
+//     "whatsappNumber fullName"
+//   );
+
+//   for (const student of students) {
+//     if (action === "add_note") {
+//       await sendWhatsAppText({
+//         to: student.whatsappNumber,
+//         text: `📝 New note for *${lecture.course}* from ${lecture.lecturer}:\n\n${content}`,
+//       });
+//     } else if (action === "add_document") {
+//       await sendWhatsAppDocument({
+//         to: student.whatsappNumber,
+//         documentId: content.waId, // the WhatsApp media id
+//         filename: content.fileName,
+//         mimeType: content.mimeType,
+//         caption: `📝 New document for *${lecture.course}* from ${lecture.lecturer}`,
+//       });
+//     }
+//   }
+
+//   console.log(`📢 Shared ${action} with ${students.length} students`);
+// }
+
+// Send a document via a template with DOCUMENT header
+async function sendLecturerUpdateDocumentTemplate({
+  to,
+  course,
+  lecturerName,
+  sourceMediaId,
+  filename,
+  mimeType,
+}) {
+  const formattedTo = formatPhoneNumber(to);
+
+  // 1) Download the lecturer’s media (from their waId) and 2) upload to your WABA to get a new media id
+  const fileBuffer = await downloadMedia(sourceMediaId);
+  const newMediaId = await uploadMedia(fileBuffer, filename, mimeType);
+
+  // 3) Send the template with a DOCUMENT header parameter
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: formattedTo,
+    type: "template",
+    template: {
+      name: "lecturer_update_document", // create/approve this template with DOCUMENT header
+      language: { code: "en_US" },
+      components: [
+        {
+          type: "header",
+          parameters: [
+            {
+              type: "document",
+              document: {
+                id: newMediaId,
+                filename, // optional but recommended on documents
+              },
+            },
+          ],
+        },
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: course }, // {{1}}
+            { type: "text", text: lecturerName }, // {{2}}
+            { type: "text", text: "📄 See attached document." }, // {{2}}
+          ],
+        },
+        // Optionally include buttons if your template defines them
+      ],
+    },
+  };
+
+  const resp = await axios.post(WHATSAPP_API_URL, payload, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+  });
+  return resp.data;
+}
+
 async function notifyStudentsOfContribution(lecture, action, content) {
   const students = await User.find({ class: lecture.class }).select(
     "whatsappNumber fullName"
   );
+  const tasks = [];
 
   for (const student of students) {
     if (action === "add_note") {
-      await sendWhatsAppText({
-        to: student.whatsappNumber,
-        text: `📝 New note for *${lecture.course}* from ${lecture.lecturer}:\n\n${content}`,
-      });
+      tasks.push(
+        sendLecturerUpdateNoteTemplate({
+          to: student.whatsappNumber,
+          course: lecture.course,
+          lecturerName: lecture.lecturer,
+          noteText: content, // plain text body
+        })
+      );
     } else if (action === "add_document") {
-      await sendWhatsAppDocument({
-        to: student.whatsappNumber,
-        documentId: content.waId, // the WhatsApp media id
-        filename: content.fileName,
-        mimeType: content.mimeType,
-        caption: `📝 New document for *${lecture.course}* from ${lecture.lecturer}`,
-      });
+      tasks.push(
+        sendLecturerUpdateDocumentTemplate({
+          to: student.whatsappNumber,
+          course: lecture.course,
+          lecturerName: lecture.lecturer,
+          sourceMediaId: content.waId, // original WhatsApp media id from lecturer
+          filename: content.fileName,
+          mimeType: content.mimeType,
+        })
+      );
     }
   }
 
+  await Promise.allSettled(tasks);
   console.log(`📢 Shared ${action} with ${students.length} students`);
+}
+
+// services/whatsapp.js (add this alongside your other send* functions)
+async function sendLecturerReminderTemplate({
+  to,
+  lecturerName,
+  course,
+  classTitle,
+  startTime,
+  endTime,
+  location,
+}) {
+  const formattedTo = formatPhoneNumber(to);
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to: formattedTo,
+    type: "template",
+    template: {
+      name: "lecturer_reminder", // your new approved template
+      language: { code: "en_US" },
+      components: [
+        // Header is "None" in your template; omit header component
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: lecturerName }, // {{1}}
+            { type: "text", text: course }, // {{2}}
+            { type: "text", text: classTitle }, // {{3}}
+            { type: "text", text: startTime }, // {{4}}
+            { type: "text", text: endTime }, // {{5}}
+            { type: "text", text: location }, // {{6}}
+          ],
+        },
+        // If your template defines quick-reply buttons (Yes/No/Reschedule), you do not
+        // need to pass button parameters unless you included payload parameters.
+      ],
+    },
+  };
+
+  const response = await axios.post(WHATSAPP_API_URL, payload, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+  });
+  return response.data;
 }
 
 module.exports = {
@@ -847,4 +1026,5 @@ module.exports = {
   sendStudentClassRescheduled,
   sendLecturerFollowUp,
   notifyStudentsOfContribution,
+  sendLecturerReminderTemplate,
 };
