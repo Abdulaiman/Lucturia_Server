@@ -88,10 +88,13 @@ exports.createLecture = catchAsync(async (req, res, next) => {
   }
 
   // ✅ Send lecturer welcome template only once per lecturer
-  if (lecturerWhatsapp) {
+  //    Exclude ALL lectures created in this request so the existence check
+  //    only considers previously stored documents.
+  if (lecturerWhatsapp && lectures.length > 0) {
+    const createdIds = lectures.map((l) => l._id);
     const alreadyExists = await Lecture.exists({
       lecturerWhatsapp,
-      _id: { $ne: lectures[0]._id }, // exclude the one we just created
+      _id: { $nin: createdIds }, // exclude the whole current batch
     });
 
     if (!alreadyExists) {
@@ -99,7 +102,7 @@ exports.createLecture = catchAsync(async (req, res, next) => {
         await sendLecturerWelcomeTemplate(
           lecturerWhatsapp,
           lecturer, // 👈 goes into {{name}}
-          classDoc.title // 👈 now using class title instead of course
+          classDoc.title // 👈 use class title instead of course
         );
       } catch (err) {
         console.error("⚠️ Failed to send lecturer welcome:", err.message);
