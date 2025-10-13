@@ -38,32 +38,28 @@ function toLocalMsisdn(waId) {
 
 // ✅ Handle button replies from lecturers
 async function handleLecturerButton(message) {
-  // --- normalize reply text ---
-  let reply = "";
-  const waMessageId = message.context?.id; // the triggering message id
+  // 1) Anchor to the original template message that had the buttons
+  const triggerId = message?.context?.id;
+  if (!triggerId) return; // nothing to correlate
 
+  // 2) Normalize reply
+  let reply = "";
   if (message.type === "button" && message.button) {
-    // Plain button
     reply = message.button.text || message.button.payload;
   } else if (
     message.type === "interactive" &&
     message.interactive?.type === "button_reply"
   ) {
-    // Interactive button reply
     reply =
       message.interactive.button_reply.title ||
       message.interactive.button_reply.id;
   }
+  if (!reply) return;
 
-  if (!reply) {
-    console.log("⚠️ Could not extract button reply from message:", message);
-    return;
-  }
-
-  console.log(`👉 Lecturer button reply detected: ${reply}`);
-
-  // --- find the lecture from the triggering message ---
-  const lectureMessage = await LectureMessage.findOne({ waMessageId });
+  // 3) Fetch the lecture via the message sent earlier
+  const lectureMessage = await LectureMessage.findOne({
+    waMessageId: triggerId,
+  });
   if (!lectureMessage) return;
 
   const lecture = await Lecture.findById(lectureMessage.lectureId).populate(
@@ -71,37 +67,48 @@ async function handleLecturerButton(message) {
   );
   if (!lecture) return;
 
-  console.log(`Lecturer responded to lecture ${lecture._id}: ${reply}`);
+  const lower = reply.toLowerCase();
 
+  // 4) Initial decision guard (YES / NO / RESCHEDULE) — process once
+  const isInitialDecision =
+    lower === "yes" || lower === "no" || lower.includes("reschedule");
+
+  if (isInitialDecision) {
+    // Atomically set decisionHandled only if it was false
+    const updated = await LectureMessage.updateOne(
+      { waMessageId: triggerId, decisionHandled: { $ne: true } },
+      { $set: { decisionHandled: true } }
+    );
+
+    if (updated.modifiedCount === 0) {
+      // Already handled — ignore duplicate webhook
+      return;
+    }
+  }
+
+  // 5) Proceed with business logic (only first time reaches here for initial decision)
   let status = "";
   let notifyFn = null;
 
-  // --- handle initial confirmation buttons ---
-  if (reply.toLowerCase() === "yes") {
+  if (lower === "yes") {
     lecture.status = "Confirmed";
     status = "Confirmed ✅";
     notifyFn = sendStudentClassConfirmed;
 
-    // send follow-up (creates PendingAction)
     await sendLecturerFollowUp({
       to: lecture.lecturerWhatsapp,
-      lectureId: lectureMessage.lectureId,
+      lectureId: lecture._id,
     });
-  } else if (reply.toLowerCase() === "no") {
+  } else if (lower === "no") {
     lecture.status = "Cancelled";
     status = "Cancelled ❌";
     notifyFn = sendStudentClassCancelled;
-  } else if (reply.toLowerCase().includes("reschedule")) {
+  } else if (lower.includes("reschedule")) {
     lecture.status = "Rescheduled";
     status = "Rescheduled 📅";
-    console.log("Lecturer initiated reschedule flow");
-  }
-
-  // --- handle follow-up buttons (Add Note / Add Document / No More) ---
-  else if (reply.toLowerCase().includes("add note")) {
-    console.log("inside add note");
+  } else if (lower.includes("add note")) {
     let pending = await PendingAction.findOne({
-      waMessageId,
+      waMessageId: triggerId,
       status: "pending",
     });
     if (!pending) {
@@ -110,7 +117,6 @@ async function handleLecturerButton(message) {
         status: "pending",
       }).sort({ createdAt: -1 });
     }
-
     if (pending) {
       pending.action = "add_note";
       await pending.save();
@@ -119,20 +125,18 @@ async function handleLecturerButton(message) {
         lecturer: lecture.lecturerWhatsapp,
         lecture: lecture._id,
         action: "add_note",
-        waMessageId,
+        waMessageId: triggerId,
         status: "pending",
       });
     }
-
     await sendWhatsAppText({
       to: lecture.lecturerWhatsapp,
       text: "✍️ Please type the note you’d like to add for this lecture.",
     });
     return;
-  } else if (reply.toLowerCase().includes("add document")) {
-    console.log("inside add document");
+  } else if (lower.includes("add document")) {
     let pending = await PendingAction.findOne({
-      waMessageId,
+      waMessageId: triggerId,
       status: "pending",
     });
     if (!pending) {
@@ -141,7 +145,6 @@ async function handleLecturerButton(message) {
         status: "pending",
       }).sort({ createdAt: -1 });
     }
-
     if (pending) {
       pending.action = "add_document";
       await pending.save();
@@ -150,7 +153,7 @@ async function handleLecturerButton(message) {
         lecturer: lecture.lecturerWhatsapp,
         lecture: lecture._id,
         action: "add_document",
-        waMessageId,
+        waMessageId: triggerId,
         status: "pending",
       });
     }
@@ -159,18 +162,12 @@ async function handleLecturerButton(message) {
       text: "📄 Please upload the document file for this lecture.",
     });
     return;
-  } else if (
-    reply.toLowerCase().includes("no more") ||
-    reply.toLowerCase().includes("no")
-  ) {
+  } else if (lower.includes("no more")) {
     const pending = await PendingAction.findOne({
-      waMessageId,
+      waMessageId: triggerId,
       status: "pending",
     });
-    if (pending) {
-      await pending.save();
-    }
-
+    if (pending) await pending.save();
     await sendWhatsAppText({
       to: lecture.lecturerWhatsapp,
       text: "👌 Got it. No extra notes or documents will be added.",
@@ -178,15 +175,14 @@ async function handleLecturerButton(message) {
     return;
   }
 
-  // --- persist changes for confirm/cancel/reschedule ---
+  // Save lecture updates
   await lecture.save();
 
-  // --- notify students if applicable ---
+  // Notify students only once (guarded by decisionHandled)
   if (notifyFn) {
     const students = await User.find({ class: lecture.class._id }).select(
       "whatsappNumber fullName"
     );
-
     for (const student of students) {
       await notifyFn({
         to: student.whatsappNumber,
@@ -199,8 +195,6 @@ async function handleLecturerButton(message) {
         location: lecture.location,
       });
     }
-
-    console.log(`📢 Notified ${students.length} students`);
   }
 }
 

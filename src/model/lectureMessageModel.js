@@ -9,6 +9,7 @@ const lectureMessageSchema = new mongoose.Schema(
       required: true,
     },
     waMessageId: { type: String, required: true, unique: true }, // WhatsApp message id
+    decisionHandled: { type: Boolean, default: false },
     recipient: { type: String }, // lecturer phone number
     type: {
       type: String,
