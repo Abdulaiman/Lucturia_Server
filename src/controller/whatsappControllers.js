@@ -4,6 +4,7 @@ const LectureMessage = require("../model/lectureMessageModel");
 const Lecture = require("../model/lectureModel");
 const PendingAction = require("../model/pendingActionModel");
 const User = require("../model/userModel");
+const ProcessedInbound = require("../model/processedInboundModel");
 const {
   sendStudentClassConfirmed,
   sendStudentClassCancelled,
@@ -198,14 +199,96 @@ async function handleLecturerButton(message) {
   }
 }
 
+// async function handleLecturerContribution(message) {
+//   let waId = message.from; // e.g., '2348032532333'
+//   const waMessageId = message.id;
+//   let content = null;
+//   const type = message.type;
+
+//   // convert incoming number to local 11-digit format
+//   if (waId.startsWith("234") && waId.length === 13) {
+//     waId = "0" + waId.slice(3); // '2348032532333' => '08032532333'
+//   }
+
+//   // find the latest pending action for this lecturer
+//   const pending = await PendingAction.findOne({
+//     lecturerWhatsapp: waId,
+//     status: "pending",
+//   })
+//     .sort({ createdAt: -1 })
+//     .populate("lecture");
+
+//   if (!pending) {
+//     console.log(
+//       `⚠️ No pending action found for lecturer ${waId}, ignoring message.`
+//     );
+//     return;
+//   }
+
+//   // capture the content
+//   if (type === "text") {
+//     content = message.text.body;
+//     console.log(`📝 Lecturer note captured: ${content}`);
+//   } else if (type === "document") {
+//     content = {
+//       waId: message.document.id, // ✅ renamed for consistency
+//       fileName: message.document.filename,
+//       mimeType: message.document.mime_type,
+//     };
+//     console.log(`📄 Lecturer uploaded document: ${content.fileName}`);
+//   } else {
+//     console.log(`⚠️ Unsupported message type from lecturer: ${type}`);
+//     return;
+//   }
+
+//   // save to lecture
+//   const lecture = pending.lecture;
+//   if (!lecture) {
+//     console.log(`⚠️ Pending action has no linked lecture, ignoring.`);
+//     return;
+//   }
+
+//   if (pending.action === "add_note" && type === "text") {
+//     lecture.notes = lecture.notes || [];
+//     lecture.notes.push({
+//       text: content,
+//       addedBy: waId,
+//       createdAt: new Date(),
+//     });
+//   } else if (pending.action === "add_document" && type === "document") {
+//     lecture.documents = lecture.documents || [];
+//     lecture.documents.push(content); // ✅ already structured with waId/fileName/mimeType
+//   }
+
+//   await lecture.save();
+
+//   await pending.save();
+
+//   // notify students with the *same content shape* you just saved
+//   await notifyStudentsOfContribution(lecture, pending.action, content);
+
+//   // confirm to lecturer
+//   await sendWhatsAppText({
+//     to: lecture.lecturerWhatsapp,
+//     text: "✅ Sent",
+//   });
+// }
+
+// -----------------
+// Handle reschedule submissions (unchanged)
+// -----------------
+
+// ✅ Handle reschedule submissions
+
+// ✅ Handle lecturer contributions (idempotent + dedupe)
 async function handleLecturerContribution(message) {
   let waId = message.from; // e.g., '2348032532333'
-  const waMessageId = message.id;
-  let content = null;
+  const waMessageId = message.id; // inbound WAMID
   const type = message.type;
+  let content = null;
 
   // convert incoming number to local 11-digit format
-  if (waId.startsWith("234") && waId.length === 13) {
+  if (waId && waId.startsWith("234") && waId.length === 13) {
     waId = "0" + waId.slice(3); // '2348032532333' => '08032532333'
   }
 
@@ -224,15 +307,32 @@ async function handleLecturerContribution(message) {
     return;
   }
 
+  // Idempotency gate: record this inbound WAMID once
+  try {
+    await ProcessedInbound.create({
+      waMessageId,
+      lectureId: pending.lecture?._id,
+      from: waId,
+      type,
+    });
+  } catch (err) {
+    // Duplicate key -> already processed this inbound message
+    if (err && err.code === 11000) {
+      console.log(`🔁 Duplicate inbound ${waMessageId} detected, skipping.`);
+      return;
+    }
+    throw err;
+  }
+
   // capture the content
   if (type === "text") {
-    content = message.text.body;
+    content = message.text?.body || "";
     console.log(`📝 Lecturer note captured: ${content}`);
   } else if (type === "document") {
     content = {
-      waId: message.document.id, // ✅ renamed for consistency
-      fileName: message.document.filename,
-      mimeType: message.document.mime_type,
+      waId: message.document?.id, // WA media/message id
+      fileName: message.document?.filename,
+      mimeType: message.document?.mime_type,
     };
     console.log(`📄 Lecturer uploaded document: ${content.fileName}`);
   } else {
@@ -247,24 +347,60 @@ async function handleLecturerContribution(message) {
     return;
   }
 
+  let inserted = false;
+
   if (pending.action === "add_note" && type === "text") {
-    lecture.notes = lecture.notes || [];
-    lecture.notes.push({
-      text: content,
-      addedBy: waId,
-      createdAt: new Date(),
-    });
+    const normText = (content || "").trim().replace(/\s+/g, " ");
+    const exists =
+      Array.isArray(lecture.notes) &&
+      lecture.notes.some(
+        (n) =>
+          typeof n?.text === "string" &&
+          (n.addedBy || "") === waId &&
+          n.text.trim().replace(/\s+/g, " ") === normText
+      );
+
+    if (!exists) {
+      lecture.notes = lecture.notes || [];
+      lecture.notes.push({
+        text: content,
+        addedBy: waId,
+        createdAt: new Date(),
+      });
+      inserted = true;
+    } else {
+      console.log("ℹ️ Duplicate note detected, not adding.");
+    }
   } else if (pending.action === "add_document" && type === "document") {
-    lecture.documents = lecture.documents || [];
-    lecture.documents.push(content); // ✅ already structured with waId/fileName/mimeType
+    const exists =
+      Array.isArray(lecture.documents) &&
+      lecture.documents.some(
+        (d) => d?.waId && content?.waId && d.waId === content.waId
+      );
+
+    if (!exists) {
+      lecture.documents = lecture.documents || [];
+      lecture.documents.push(content); // structured with waId/fileName/mimeType
+      inserted = true;
+    } else {
+      console.log("ℹ️ Duplicate document detected by waId, not adding.");
+    }
+  } else {
+    console.log(`⚠️ Action/type mismatch: ${pending.action} vs ${type}`);
+    return;
   }
 
-  await lecture.save();
-
-  await pending.save();
-
-  // notify students with the *same content shape* you just saved
-  await notifyStudentsOfContribution(lecture, pending.action, content);
+  if (inserted) {
+    await lecture.save();
+    await pending.save();
+    // notify students with the same content shape you just saved
+    await notifyStudentsOfContribution(lecture, pending.action, content);
+  } else {
+    // Still confirm to lecturer to avoid confusion
+    console.log(
+      "ℹ️ No changes persisted due to duplication; notifying lecturer only."
+    );
+  }
 
   // confirm to lecturer
   await sendWhatsAppText({
@@ -273,14 +409,28 @@ async function handleLecturerContribution(message) {
   });
 }
 
-// -----------------
-// Handle reschedule submissions (unchanged)
-// -----------------
-
-// ✅ Handle reschedule submissions
+// ✅ Handle reschedule submissions (idempotent + no-op guard)
 async function handleLecturerReschedule(message) {
+  // 1) Dedupe by inbound WAMID for this interactive submission
+  const inboundId = message.id; // unique WAMID for the submission
+  try {
+    await ProcessedInbound.create({
+      waMessageId: inboundId,
+      type: "interactive_reschedule",
+      from: message.from,
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      console.log(`🔁 Duplicate reschedule inbound ${inboundId}, skipping.`);
+      return;
+    }
+    throw err;
+  }
+
+  // 2) Parse interactive native flow payload
   const resData = JSON.parse(message.interactive.nfm_reply.response_json);
 
+  // 3) Anchor to the original outbound message via context.id
   const waMessageId = message.context?.id;
   const lectureMessage = await LectureMessage.findOne({ waMessageId });
   if (!lectureMessage) return;
@@ -290,17 +440,36 @@ async function handleLecturerReschedule(message) {
   );
   if (!lecture) return;
 
-  lecture.status = "Rescheduled";
-  lecture.startTime = new Date(
+  // 4) Compute new times
+  const newStart = new Date(
     `${resData.screen_0_New_Date_0}T${
       resData.screen_0_Class_Starts_1.split("_")[1]
     }`
   );
-  lecture.endTime = new Date(
+  const newEnd = new Date(
     `${resData.screen_0_New_Date_0}T${
       resData.screen_0_Class_Ends_2.split("_")[1]
     }`
   );
+
+  // 5) No-op guard (avoid duplicate notifications if nothing changed)
+  const unchanged =
+    lecture.startTime?.getTime() === newStart.getTime() &&
+    lecture.endTime?.getTime() === newEnd.getTime() &&
+    (lecture.status || "").toLowerCase() === "rescheduled";
+
+  if (unchanged) {
+    await sendWhatsAppText({
+      to: lecture.lecturerWhatsapp,
+      text: "✅ Reschedule received (no changes detected).",
+    });
+    return;
+  }
+
+  // 6) Apply update and notify once
+  lecture.status = "Rescheduled";
+  lecture.startTime = newStart;
+  lecture.endTime = newEnd;
 
   await lecture.save();
 
@@ -308,7 +477,6 @@ async function handleLecturerReschedule(message) {
     `📅 Lecture rescheduled: ${lecture.startTime} - ${lecture.endTime}`
   );
 
-  // notify students
   const students = await User.find({ class: lecture.class._id }).select(
     "whatsappNumber fullName"
   );
@@ -328,9 +496,90 @@ async function handleLecturerReschedule(message) {
   }
 
   console.log(`📢 Notified ${students.length} students of reschedule`);
+
+  // Optional: confirm to lecturer
+  await sendWhatsAppText({
+    to: lecture.lecturerWhatsapp,
+    text: "✅ Reschedule sent",
+  });
 }
 
+// async function handleStudentKeywordSummary(message) {
+//   const waId = message.from; // e.g. "23480..."
+//   const local = toLocalMsisdn(waId);
+
+//   const student = await User.findOne({ whatsappNumber: local }).populate(
+//     "class"
+//   );
+//   if (!student || !student.class) {
+//     // Optional: send a friendly fallback or ignore
+//     return;
+//   }
+
+//   const todayStart = dayjs().tz("Africa/Lagos").startOf("day").toDate();
+//   const todayEnd = dayjs().tz("Africa/Lagos").endOf("day").toDate();
+
+//   const lectures = await Lecture.find({
+//     class: student.class._id,
+//     startTime: { $gte: todayStart, $lte: todayEnd },
+//   });
+
+//   if (!lectures.length) {
+//     await sendWhatsAppText({
+//       to: student.whatsappNumber,
+//       text: `📌 Hi ${student.fullName}, your lectures for today are yet to be scheduled, Reach out to your reps!`,
+//     });
+//     return;
+//   }
+
+//   let messageOut = `📚 Hello ${
+//     student.fullName
+//   }, here’s your schedule for ${formatLagosDate(new Date())}:\n\n`;
+
+//   lectures.forEach((lec, i) => {
+//     const start = formatLagosTime(lec.startTime);
+//     const end = formatLagosTime(lec.endTime);
+//     const status = (lec.status || "").toLowerCase();
+
+//     let statusText = "⏳ Pending lecturer's response";
+//     if (status === "confirmed") statusText = "✅ Confirmed";
+//     else if (status === "cancelled") statusText = "❌ Cancelled";
+//     else if (status === "rescheduled") {
+//       const newDate = formatLagosDate(lec.startTime);
+//       statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
+//     }
+
+//     messageOut += `${i + 1}. ${lec.course} by ${
+//       lec.lecturer
+//     } (${start}-${end}) - ${statusText}\n`;
+//   });
+
+//   messageOut += `\n🔔 Tap below to get tomorrow’s schedule automatically!`;
+
+//   await sendWhatsAppText({
+//     to: student.whatsappNumber,
+//     text: messageOut,
+//     buttons: [{ id: "remind_tomorrow", title: "🔔 Remind me tomorrow" }],
+//   });
+// }
+
 async function handleStudentKeywordSummary(message) {
+  // Idempotency: record inbound WAMID once; skip duplicate deliveries
+  const inboundId = message.id; // unique per inbound text
+  try {
+    await ProcessedInbound.create({
+      waMessageId: inboundId,
+      from: message.from,
+      type: "text_keyword",
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      console.log(`🔁 Duplicate keyword inbound ${inboundId}, skipping.`);
+      return;
+    }
+    throw err;
+  }
+
   const waId = message.from; // e.g. "23480..."
   const local = toLocalMsisdn(waId);
 
@@ -388,10 +637,78 @@ async function handleStudentKeywordSummary(message) {
     buttons: [{ id: "remind_tomorrow", title: "🔔 Remind me tomorrow" }],
   });
 }
+// whatsappHandlers.js (excerpt)
+
+// whatsappHandlers.js
+
+async function handleClassRepBroadcast(message) {
+  if (message.type !== "text") return;
+
+  const rawText = message.text?.body || "";
+  const textTrim = rawText.trim();
+  if (!textTrim) return;
+
+  // Never broadcast exact 'summary'
+  if (textTrim.toLowerCase() === "summary") return;
+
+  // Verify sender is a class rep BEFORE idempotency insert
+  const local = toLocalMsisdn(message.from);
+  const rep = await User.findOne({ whatsappNumber: local }).populate("class");
+  if (!rep || !rep.class) return;
+  const role = (rep.role || "").toLowerCase();
+  if (role !== "class_rep" && role !== "rep" && role !== "classrep") return;
+
+  // Idempotency by inbound WAMID (only for actual rep messages)
+  const inboundId = message.id; // WAMID
+  try {
+    await ProcessedInbound.create({
+      waMessageId: inboundId,
+      from: message.from,
+      type: "class_rep_broadcast",
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      console.log(`🔁 Duplicate class-rep inbound ${inboundId}, skipping.`);
+      return;
+    }
+    throw err;
+  }
+
+  const classmates = await User.find({
+    class: rep.class._id,
+    role: { $in: ["student", "admin", "Student", "STUDENT"] }, // students only
+  }).select("whatsappNumber fullName");
+
+  if (!classmates.length) {
+    await sendWhatsAppText({
+      to: rep.whatsappNumber,
+      text: "ℹ️ No students found in your class to broadcast to.",
+    });
+    return;
+  }
+
+  const repName = getFirstName(rep.fullName || "Class Rep");
+  const payload = `📣 From your Class Rep, ${repName}:\n\n${textTrim}`;
+
+  for (const student of classmates) {
+    if (
+      !student.whatsappNumber ||
+      student.whatsappNumber === rep.whatsappNumber
+    )
+      continue;
+    await sendWhatsAppText({ to: student.whatsappNumber, text: payload });
+  }
+
+  await sendWhatsAppText({
+    to: rep.whatsappNumber,
+    text: "✅ Your message has been sent to the class.",
+  });
+}
 
 module.exports = {
   handleLecturerButton,
   handleLecturerReschedule,
   handleLecturerContribution,
   handleStudentKeywordSummary,
+  handleClassRepBroadcast,
 };

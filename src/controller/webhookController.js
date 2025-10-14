@@ -3,30 +3,34 @@ const LectureMessage = require("../model/lectureMessageModel");
 const Lecture = require("../model/lectureModel");
 const User = require("../model/userModel");
 const AppError = require("../../utils/app-error");
-const {
-  sendStudentClassCancelled,
-  sendStudentClassConfirmed,
-  sendStudentClassRescheduled,
-  sendLecturerFollowUp,
-} = require("../services/whatsapp");
+const PendingAction = require("../model/pendingActionModel"); // used to prioritize contribution flow
+
 const {
   handleLecturerButton,
   handleLecturerReschedule,
   handleLecturerContribution,
   handleStudentKeywordSummary,
+  handleClassRepBroadcast,
 } = require("./whatsappControllers");
+
+// Helpers (local; keep consistent with your shared utils if needed)
+function toLocalMsisdn(waId) {
+  return waId?.startsWith("234") && waId.length === 13
+    ? "0" + waId.slice(3)
+    : waId;
+}
 
 function getFirstName(fullName = "") {
   if (!fullName) return "";
-  const first = fullName.trim().split(" ")[0]; // take first part
-  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase(); // capitalize
+  const first = fullName.trim().split(" ")[0];
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 }
 function formatTime(date) {
   if (!date) return "";
   return new Date(date).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
-    hour12: true, // 👈 optional: remove this if you want 24h format
+    hour12: true, // toggle if you prefer 24h
   });
 }
 
@@ -45,6 +49,7 @@ exports.verifyWebhook = (req, res, next) => {
     return res.sendStatus(403);
   }
 };
+
 // Handle incoming webhook events
 exports.handleWebhook = async (req, res, next) => {
   try {
@@ -56,15 +61,28 @@ exports.handleWebhook = async (req, res, next) => {
         if (!change.value.messages) continue;
 
         for (const message of change.value.messages) {
-          console.log(message);
-
-          // 0) Student keyword: "summary" (case-insensitive)
+          // 0) Exact keyword: "summary" (case-insensitive)
           if (message.type === "text") {
-            const bodyText = (message.text?.body || "").trim().toLowerCase();
-            if (bodyText.includes("summary")) {
-              await handleStudentKeywordSummary(message);
-              continue; // short-circuit so lecturer handlers don't run
+            const bodyText = (message.text?.body || "").trim();
+            if (bodyText && bodyText.toLowerCase() === "summary") {
+              await handleStudentKeywordSummary(message); // idempotent by inbound WAMID
+              continue; // stop other handlers, including class-rep broadcast
             }
+
+            // 0a) If lecturer has a pending contribution, handle it and stop
+            const local = toLocalMsisdn(message.from);
+            const pending = await PendingAction.findOne({
+              lecturerWhatsapp: local,
+              status: "pending",
+            }).sort({ createdAt: -1 });
+
+            if (pending) {
+              await handleLecturerContribution(message); // idempotent by inbound WAMID
+              continue; // ensures only one handler claims this WAMID
+            }
+
+            // 0b) Otherwise, allow class rep broadcast (no-op if sender isn't a rep)
+            await handleClassRepBroadcast(message); // idempotent by inbound WAMID after role check
           }
 
           // 1) Lecturer buttons (yes/no/reschedule and follow-ups)
@@ -84,14 +102,16 @@ exports.handleWebhook = async (req, res, next) => {
             await handleLecturerReschedule(message);
           }
 
-          // 3) Lecturer contribution (text/doc)
-          if (message.type === "text" || message.type === "document") {
+          // 3) Lecturer contribution (documents or any non-text content)
+          // Text contributions are handled earlier when a pending action exists.
+          if (message.type === "document") {
             await handleLecturerContribution(message);
           }
         }
       }
     }
 
+    // Always 200 to avoid webhook retries
     res.sendStatus(200);
   } catch (err) {
     console.error("❌ Webhook handler error:", err);

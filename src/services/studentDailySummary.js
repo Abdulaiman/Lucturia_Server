@@ -42,7 +42,7 @@ const studentDailySummaryJob = cron.schedule(
         if (!lectures.length) {
           await sendWhatsAppText({
             to: student.whatsappNumber,
-            text: `📌 Hi ${student.fullName}, you have no lectures today!`,
+            text: `📌 Hi ${student.fullName}, your lectures for today are yet to be scheduled, Reach out to your reps!`,
           });
           continue;
         }
