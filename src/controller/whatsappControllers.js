@@ -649,7 +649,14 @@ async function handleClassRepBroadcast(message) {
   if (!textTrim) return;
 
   // Never broadcast exact 'summary'
-  if (textTrim.toLowerCase() === "summary") return;
+  if (
+    textTrim.toLowerCase() === "summary" ||
+    textTrim.toLowerCase() === "got it" ||
+    textTrim.toLowerCase() === "no" ||
+    textTrim.toLowerCase() === "yes" ||
+    textTrim.toLowerCase() === "not sure"
+  )
+    return;
 
   // Verify sender is a class rep BEFORE idempotency insert
   const local = toLocalMsisdn(message.from);
