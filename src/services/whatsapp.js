@@ -1012,6 +1012,37 @@ async function sendLecturerReminderTemplate({
   });
   return response.data;
 }
+async function sendNoLectureNotificationTemplate({ to, fullname }) {
+  const formattedTo = formatPhoneNumber(to);
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: formattedTo,
+    type: "template",
+    template: {
+      name: "no_lecture", // must match your approved template name
+      language: { code: "en_US" }, // must match template language
+      // Header is static text in the template; no header parameters needed
+      components: [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: fullname }, // {{1}}
+          ],
+        },
+      ],
+    },
+  };
+
+  const response = await axios.post(WHATSAPP_API_URL, payload, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+  });
+  return response.data;
+}
 
 module.exports = {
   sendWhatsAppMessage,
@@ -1027,4 +1058,5 @@ module.exports = {
   sendLecturerFollowUp,
   notifyStudentsOfContribution,
   sendLecturerReminderTemplate,
+  sendNoLectureNotificationTemplate,
 };

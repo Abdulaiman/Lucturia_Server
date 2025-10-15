@@ -4,7 +4,10 @@ const utc = require("dayjs/plugin/utc");
 const timezone = require("dayjs/plugin/timezone");
 const Lecture = require("../model/lectureModel");
 const User = require("../model/userModel");
-const { sendWhatsAppText } = require("./whatsapp"); // your helper
+const {
+  sendWhatsAppText,
+  sendNoLectureNotificationTemplate,
+} = require("./whatsapp"); // your helper
 const PendingAction = require("../model/pendingActionModel");
 
 // extend dayjs
@@ -40,10 +43,11 @@ const studentDailySummaryJob = cron.schedule(
         });
 
         if (!lectures.length) {
-          await sendWhatsAppText({
+          await sendNoLectureNotificationTemplate({
             to: student.whatsappNumber,
-            text: `📌 Hi ${student.fullName}, your lectures for today are yet to be scheduled, Reach out to your reps!`,
+            fullname: student.fullName,
           });
+
           continue;
         }
 
