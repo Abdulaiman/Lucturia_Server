@@ -37,6 +37,99 @@ function toLocalMsisdn(waId) {
     : waId;
 }
 
+// ---- helpers (place near top of the file) ----
+const MAX_TEMPLATE_BODY = 1024; // official WhatsApp template body limit [Meta]
+const RESERVED_HEADROOM = 100; // safety buffer under limit
+const EFFECTIVE_LIMIT = MAX_TEMPLATE_BODY - RESERVED_HEADROOM; // 924
+
+// Split by sentences while preserving newline tokens
+function splitBySentence(text) {
+  const parts = [];
+  const tokens = String(text).split(/(\n{2,}|\n)/); // keep newlines as tokens
+  for (const tk of tokens) {
+    if (tk === "\n" || /^\n{2,}$/.test(tk)) {
+      parts.push(tk);
+      continue;
+    }
+    // heuristic sentence split: end punctuation + space + capital/digit start
+    const sentences = tk.split(/(?<=[.!?])\s+(?=[A-Z0-9])/);
+    for (const s of sentences) parts.push(s);
+  }
+  return parts;
+}
+
+// Pack text into chunks <= limit, preferring paragraph/sentence/word boundaries
+function packChunksPreservingLayout(text, limit = EFFECTIVE_LIMIT) {
+  const normalized = String(text).normalize("NFC");
+  const paras = normalized.split(/\n{2,}/);
+  const chunks = [];
+  let current = "";
+
+  const canAppend = (piece) => current.length + piece.length <= limit;
+  const flush = () => {
+    if (current.trim().length) chunks.push(current.trimEnd());
+    current = "";
+  };
+
+  for (let i = 0; i < paras.length; i++) {
+    const para = paras[i];
+    let paraText = i < paras.length - 1 ? para + "\n\n" : para;
+
+    if (paraText.length <= limit) {
+      if (canAppend(paraText)) current += paraText;
+      else {
+        flush();
+        current = paraText;
+      }
+      continue;
+    }
+
+    // Paragraph too long: split by sentences, then by words, then hard-split as last resort
+    const parts = splitBySentence(paraText);
+    for (const part of parts) {
+      if (part.length <= limit) {
+        if (canAppend(part)) current += part;
+        else {
+          flush();
+          current = part;
+        }
+      } else {
+        const words = part.split(/(\s+)/); // keep spaces
+        for (const w of words) {
+          if (w.length <= limit) {
+            if (canAppend(w)) current += w;
+            else {
+              flush();
+              current = w;
+            }
+          } else {
+            // Hard split giant token
+            let start = 0;
+            while (start < w.length) {
+              const slice = w.slice(start, start + limit);
+              if (canAppend(slice)) current += slice;
+              else {
+                flush();
+                current = slice;
+              }
+              start += limit;
+            }
+          }
+        }
+      }
+    }
+  }
+  flush();
+  return chunks;
+}
+
+// Optional header to help students follow multi-part notes
+function annotateParts(chunks) {
+  if (chunks.length <= 1) return chunks;
+  const n = chunks.length;
+  return chunks.map((c, i) => `Part ${i + 1}/${n}\n\n` + c);
+}
+
 // ✅ Handle button replies from lecturers
 async function handleLecturerButton(message) {
   // 1) Anchor to the original template message that had the buttons
@@ -363,7 +456,7 @@ async function handleLecturerContribution(message) {
     if (!exists) {
       lecture.notes = lecture.notes || [];
       lecture.notes.push({
-        text: content,
+        text: content, // preserve full original note in DB
         addedBy: waId,
         createdAt: new Date(),
       });
@@ -371,6 +464,33 @@ async function handleLecturerContribution(message) {
     } else {
       console.log("ℹ️ Duplicate note detected, not adding.");
     }
+
+    if (!inserted) {
+      // Confirm to lecturer even if duplicate to avoid confusion
+      await sendWhatsAppText({ to: lecture.lecturerWhatsapp, text: "✅ Sent" });
+      return;
+    }
+
+    // Persist the saved note before fan-out
+    await lecture.save();
+    await pending.save();
+
+    // Split into safe chunks that preserve layout and stay under the template body limit
+    const chunks = annotateParts(
+      packChunksPreservingLayout(content, EFFECTIVE_LIMIT)
+    );
+
+    // Fan-out: send each chunk sequentially so order is preserved per student
+    for (const part of chunks) {
+      await notifyStudentsOfContribution(lecture, "add_note", part);
+    }
+
+    // Confirm to lecturer with part count
+    await sendWhatsAppText({
+      to: lecture.lecturerWhatsapp,
+      text: `✅ Sent${chunks.length > 1 ? ` in ${chunks.length} parts` : ""}`,
+    });
+    return; // done with text path
   } else if (pending.action === "add_document" && type === "document") {
     const exists =
       Array.isArray(lecture.documents) &&
@@ -380,7 +500,7 @@ async function handleLecturerContribution(message) {
 
     if (!exists) {
       lecture.documents = lecture.documents || [];
-      lecture.documents.push(content); // structured with waId/fileName/mimeType
+      lecture.documents.push(content); // waId/fileName/mimeType
       inserted = true;
     } else {
       console.log("ℹ️ Duplicate document detected by waId, not adding.");
@@ -390,19 +510,17 @@ async function handleLecturerContribution(message) {
     return;
   }
 
+  // Document or other paths: persist, notify once, confirm
   if (inserted) {
     await lecture.save();
     await pending.save();
-    // notify students with the same content shape you just saved
     await notifyStudentsOfContribution(lecture, pending.action, content);
   } else {
-    // Still confirm to lecturer to avoid confusion
     console.log(
       "ℹ️ No changes persisted due to duplication; notifying lecturer only."
     );
   }
 
-  // confirm to lecturer
   await sendWhatsAppText({
     to: lecture.lecturerWhatsapp,
     text: "✅ Sent",
