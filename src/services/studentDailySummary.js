@@ -43,11 +43,20 @@ const studentDailySummaryJob = cron.schedule(
         });
 
         if (!lectures.length) {
-          await sendNoLectureNotificationTemplate({
+          // await sendNoLectureNotificationTemplate({
+          //   to: student.whatsappNumber,
+          //   fullname: student.fullName,
+          // });
+          await sendWhatsAppText({
             to: student.whatsappNumber,
-            fullname: student.fullName,
+            text: `📌 Hi ${student.fullName}, the timetable for today’s lecture hasn’t been released yet—please contact your class reps for updates.`,
+            buttons: [
+              {
+                id: "remind_tomorrow",
+                title: "🔔 Remind me tomorrow",
+              },
+            ],
           });
-
           continue;
         }
 

@@ -720,7 +720,7 @@ async function handleStudentKeywordSummary(message) {
   if (!lectures.length) {
     await sendWhatsAppText({
       to: student.whatsappNumber,
-      text: `📌 Hi ${student.fullName}, your lectures for today are yet to be scheduled, Reach out to your reps!`,
+      text: `📌 Hi ${student.fullName}, You have no lectures today!`,
     });
     return;
   }
