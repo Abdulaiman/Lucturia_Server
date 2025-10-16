@@ -932,6 +932,42 @@ async function sendLecturerUpdateDocumentTemplate({
   return resp.data;
 }
 
+// number 2
+
+// async function notifyStudentsOfContribution(lecture, action, content) {
+//   const students = await User.find({ class: lecture.class }).select(
+//     "whatsappNumber fullName"
+//   );
+//   const tasks = [];
+
+//   for (const student of students) {
+//     if (action === "add_note") {
+//       tasks.push(
+//         sendLecturerUpdateNoteTemplate({
+//           to: student.whatsappNumber,
+//           course: lecture.course,
+//           lecturerName: lecture.lecturer,
+//           noteText: content, // plain text body
+//         })
+//       );
+//     } else if (action === "add_document") {
+//       tasks.push(
+//         sendLecturerUpdateDocumentTemplate({
+//           to: student.whatsappNumber,
+//           course: lecture.course,
+//           lecturerName: lecture.lecturer,
+//           sourceMediaId: content.waId, // original WhatsApp media id from lecturer
+//           filename: content.fileName,
+//           mimeType: content.mimeType,
+//         })
+//       );
+//     }
+//   }
+
+//   await Promise.allSettled(tasks);
+//   console.log(`📢 Shared ${action} with ${students.length} students`);
+// }
+
 async function notifyStudentsOfContribution(lecture, action, content) {
   const students = await User.find({ class: lecture.class }).select(
     "whatsappNumber fullName"
@@ -945,7 +981,7 @@ async function notifyStudentsOfContribution(lecture, action, content) {
           to: student.whatsappNumber,
           course: lecture.course,
           lecturerName: lecture.lecturer,
-          noteText: content, // plain text body
+          noteText: content,
         })
       );
     } else if (action === "add_document") {
@@ -954,7 +990,7 @@ async function notifyStudentsOfContribution(lecture, action, content) {
           to: student.whatsappNumber,
           course: lecture.course,
           lecturerName: lecture.lecturer,
-          sourceMediaId: content.waId, // original WhatsApp media id from lecturer
+          sourceMediaId: content.waId,
           filename: content.fileName,
           mimeType: content.mimeType,
         })
@@ -962,8 +998,24 @@ async function notifyStudentsOfContribution(lecture, action, content) {
     }
   }
 
-  await Promise.allSettled(tasks);
-  console.log(`📢 Shared ${action} with ${students.length} students`);
+  const results = await Promise.allSettled(tasks);
+
+  // Count successes vs failures
+  const successful = results.filter((r) => r.status === "fulfilled").length;
+  const failed = results.filter((r) => r.status === "rejected").length;
+
+  console.log(
+    `📢 Message delivery: ${successful} successful, ${failed} failed out of ${students.length} total`
+  );
+
+  // Log first few failures for debugging
+  if (failed > 0) {
+    const failures = results
+      .filter((r) => r.status === "rejected")
+      .slice(0, 3)
+      .map((r) => r.reason);
+    console.log(`❌ First few failures:`, failures);
+  }
 }
 
 // services/whatsapp.js (add this alongside your other send* functions)
