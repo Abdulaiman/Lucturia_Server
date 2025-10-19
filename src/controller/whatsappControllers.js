@@ -267,24 +267,22 @@ async function handleLecturerButton(message) {
   // 5) Handle action-type branches first (add note / add document / no more)
   // In handleLecturerButton, normalize to lecturerWhatsapp consistently
   // and flip focus on "add note" / "add document"
+  // In handleLecturerButton: flip persistent focus with no expiresAt
   if (lower.includes("add note")) {
-    // Deactivate other pendings for this lecturer
     await PendingAction.updateMany(
       { lecturerWhatsapp: lecture.lecturerWhatsapp, status: "pending" },
       { $set: { active: false } }
     );
 
-    // Upsert the focused pending for this lecture anchored to triggerId
     await PendingAction.findOneAndUpdate(
-      { waMessageId: triggerId }, // the message with the buttons
+      { waMessageId: triggerId },
       {
         $set: {
-          lecturerWhatsapp: lecture.lecturerWhatsapp, // normalize field
+          lecturerWhatsapp: lecture.lecturerWhatsapp,
           lecture: lecture._id,
           action: "add_note",
           status: "pending",
-          active: true,
-          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          active: true, // persistent focus
         },
       },
       { upsert: true, new: true }
@@ -292,7 +290,7 @@ async function handleLecturerButton(message) {
 
     await sendWhatsAppText({
       to: lecture.lecturerWhatsapp,
-      text: "✍️ Please type the note for this lecture. Tip: reply to this message to keep it attached.",
+      text: "✍️ Please type the note for this lecture.",
     });
     return;
   }
@@ -311,8 +309,7 @@ async function handleLecturerButton(message) {
           lecture: lecture._id,
           action: "add_document",
           status: "pending",
-          active: true,
-          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          active: true, // persistent focus
         },
       },
       { upsert: true, new: true }
@@ -326,14 +323,13 @@ async function handleLecturerButton(message) {
   }
 
   if (lower.includes("no more")) {
-    // Close and clear focus for whichever pending is tied to this trigger
     const pending = await PendingAction.findOne({
       waMessageId: triggerId,
       status: "pending",
     });
     if (pending) {
       pending.status = "closed";
-      pending.active = false;
+      pending.active = false; // clear focus
       await pending.save();
     }
     await sendWhatsAppText({
@@ -455,8 +451,7 @@ async function sendContributionFollowUp({
   }
 }
 
-// Resolve PendingAction using context.id first, else latest-by-lecturer
-// Prefer context.id -> active:true -> latest pending
+// Prefer context.id -> active:true -> latest pending (no TTL checks)
 async function resolvePendingForInbound({ message, waLocal }) {
   const ctxId = message?.context?.id;
   if (ctxId) {
@@ -464,15 +459,13 @@ async function resolvePendingForInbound({ message, waLocal }) {
       waMessageId: ctxId,
       status: "pending",
     }).populate("lecture");
-    if (byCtx) return byCtx;
+    if (byCtx) return byCtx; // deterministically anchored by interaction/reply
   }
 
-  const now = new Date();
   const focused = await PendingAction.findOne({
     lecturerWhatsapp: waLocal,
     status: "pending",
-    active: true,
-    $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+    active: true, // persistent focus
   })
     .sort({ updatedAt: -1 })
     .populate("lecture");
@@ -659,6 +652,7 @@ async function handleLecturerContribution(message) {
 
     if (inserted) {
       await lecture.save();
+      pending.active = false; // focus consumed on completion
       await pending.save();
       await notifyStudentsOfContribution(lecture, "add_document", content);
 
