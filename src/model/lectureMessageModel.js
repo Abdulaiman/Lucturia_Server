@@ -13,7 +13,7 @@ const lectureMessageSchema = new mongoose.Schema(
     recipient: { type: String }, // lecturer phone number
     type: {
       type: String,
-      enum: ["notification", "followup"],
+      enum: ["notification", "followup", "contrib_followup"],
       default: "notification",
     },
     buttonId: { type: String }, // e.g. add_note_123

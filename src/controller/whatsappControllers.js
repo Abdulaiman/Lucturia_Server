@@ -12,6 +12,7 @@ const {
   sendLecturerFollowUp,
   sendWhatsAppText,
   notifyStudentsOfContribution,
+  sendLecturerCancelNotePrompt,
 } = require("../services/whatsapp");
 const { getFirstName, formatTime } = require("../../utils/helpers");
 
@@ -130,8 +131,98 @@ function annotateParts(chunks) {
   return chunks.map((c, i) => `Part ${i + 1}/${n}\n\n` + c);
 }
 
+// Replace newlines/tabs; collapse long whitespace; strip control chars
+function sanitizeForWhatsAppTemplate(text) {
+  let s = String(text);
+
+  // 1) Remove forbidden line breaks/tabs (use a visible inline separator)
+  s = s.replace(/\r\n|\r|\n/g, " • ");
+  s = s.replace(/\t/g, " ");
+
+  // 2) Strip ASCII control chars except newline/tab (already removed)
+  s = s.replace(/[\u0000-\u0009\u000B-\u000C\u000E-\u001F\u007F]/g, "");
+
+  // 3) Collapse long whitespace (avoid >4 spaces); safest is single space
+  s = s.replace(/[ \u00A0]{2,}/g, " ");
+
+  // 4) Trim edges
+  s = s.trim();
+
+  return s;
+}
+
+// Chunk after sanitization so limits are accurate for template
+function packChunksForTemplate(safeText, limit = EFFECTIVE_LIMIT) {
+  const text = String(safeText);
+  const chunks = [];
+  let current = "";
+
+  // Prefer sentence boundaries, then words
+  const parts = text.split(/(?<=[.!?])\s+(?=[A-Za-z0-9])/);
+
+  const pushOrStart = (piece) => {
+    if (!current.length) {
+      current = piece;
+      return;
+    }
+    if (current.length + 1 + piece.length <= limit) {
+      current += " " + piece;
+    } else {
+      chunks.push(current);
+      current = piece;
+    }
+  };
+
+  for (const p of parts) {
+    if (p.length <= limit) {
+      pushOrStart(p);
+    } else {
+      // split by words if sentence is still too long
+      const words = p.split(/\s+/);
+      for (const w of words) {
+        if (!w) continue;
+        if (!current.length) {
+          current = w;
+        } else if (current.length + 1 + w.length <= limit) {
+          current += " " + w;
+        } else {
+          chunks.push(current);
+          current = w;
+        }
+      }
+    }
+  }
+  if (current.trim().length) chunks.push(current);
+  return chunks;
+}
+
+function annotatePartsForTemplate(chunks) {
+  if (chunks.length <= 1) return chunks;
+  const n = chunks.length;
+  return chunks.map((c, i) => `Part ${i + 1}/${n} — ` + c);
+}
+
 // ✅ Handle button replies from lecturers
 async function handleLecturerButton(message) {
+  // 0) Idempotency by inbound WAMID (process each button press once)
+  const inboundId = message?.id; // inbound wamid for this button reply
+  if (!inboundId) return;
+
+  try {
+    await ProcessedInbound.create({
+      waMessageId: inboundId,
+      from: message.from, // optional
+      type: "button",
+      // lectureId can be added later if you prefer updating after fetch
+    });
+  } catch (e) {
+    if (e && e.code === 11000) {
+      // duplicate inbound event -> already processed
+      return;
+    }
+    throw e;
+  }
+
   // 1) Anchor to the original template message that had the buttons
   const triggerId = message?.context?.id;
   if (!triggerId) return; // nothing to correlate
@@ -163,44 +254,18 @@ async function handleLecturerButton(message) {
 
   const lower = reply.toLowerCase();
 
-  // 4) Initial decision guard (YES / NO / RESCHEDULE) — process once
-  const isInitialDecision =
-    lower === "yes" || lower === "no" || lower.includes("reschedule");
+  // 4) Map to desired status/action (explicit state transition)
+  const desired =
+    lower === "yes"
+      ? "Confirmed"
+      : lower === "no"
+      ? "Cancelled"
+      : lower.includes("reschedule")
+      ? "Rescheduled"
+      : null;
 
-  if (isInitialDecision) {
-    // Atomically set decisionHandled only if it was false
-    const updated = await LectureMessage.updateOne(
-      { waMessageId: triggerId, decisionHandled: { $ne: true } },
-      { $set: { decisionHandled: true } }
-    );
-
-    if (updated.modifiedCount === 0) {
-      // Already handled — ignore duplicate webhook
-      return;
-    }
-  }
-
-  // 5) Proceed with business logic (only first time reaches here for initial decision)
-  let status = "";
-  let notifyFn = null;
-
-  if (lower === "yes") {
-    lecture.status = "Confirmed";
-    status = "Confirmed ✅";
-    notifyFn = sendStudentClassConfirmed;
-
-    await sendLecturerFollowUp({
-      to: lecture.lecturerWhatsapp,
-      lectureId: lecture._id,
-    });
-  } else if (lower === "no") {
-    lecture.status = "Cancelled";
-    status = "Cancelled ❌";
-    notifyFn = sendStudentClassCancelled;
-  } else if (lower.includes("reschedule")) {
-    lecture.status = "Rescheduled";
-    status = "Rescheduled 📅";
-  } else if (lower.includes("add note")) {
+  // 5) Handle action-type branches first (add note / add document / no more)
+  if (lower.includes("add note")) {
     let pending = await PendingAction.findOne({
       waMessageId: triggerId,
       status: "pending",
@@ -228,7 +293,9 @@ async function handleLecturerButton(message) {
       text: "✍️ Please type the note you’d like to add for this lecture.",
     });
     return;
-  } else if (lower.includes("add document")) {
+  }
+
+  if (lower.includes("add document")) {
     let pending = await PendingAction.findOne({
       waMessageId: triggerId,
       status: "pending",
@@ -256,12 +323,17 @@ async function handleLecturerButton(message) {
       text: "📄 Please upload the document file for this lecture.",
     });
     return;
-  } else if (lower.includes("no more")) {
+  }
+
+  if (lower.includes("no more")) {
     const pending = await PendingAction.findOne({
       waMessageId: triggerId,
       status: "pending",
     });
-    if (pending) await pending.save();
+    if (pending) {
+      pending.status = "closed";
+      await pending.save();
+    }
     await sendWhatsAppText({
       to: lecture.lecturerWhatsapp,
       text: "👌 Got it. No extra notes or documents will be added.",
@@ -269,10 +341,54 @@ async function handleLecturerButton(message) {
     return;
   }
 
-  // Save lecture updates
+  // 6) Initial decision transitions (Confirmed/Cancelled/Rescheduled)
+  // Allow transitions even if same triggerId; guard duplicates by inboundId above.
+  let status = "";
+  let notifyFn = null;
+
+  if (desired) {
+    // Only transition if it's different from current status
+    if (lecture.status !== desired) {
+      if (desired === "Confirmed") {
+        lecture.status = "Confirmed";
+        status = "Confirmed ✅";
+        notifyFn = sendStudentClassConfirmed;
+
+        await sendLecturerFollowUp({
+          to: lecture.lecturerWhatsapp,
+          lectureId: lecture._id,
+        });
+      } else if (desired === "Cancelled") {
+        lecture.status = "Cancelled";
+        status = "Cancelled ❌";
+        notifyFn = sendStudentClassCancelled;
+
+        await sendLecturerCancelNotePrompt({
+          to: lecture.lecturerWhatsapp,
+          lectureId: lecture._id,
+        });
+      } else if (desired === "Rescheduled") {
+        lecture.status = "Rescheduled";
+        status = "Rescheduled 📅";
+        // You can prompt for new time/date here if needed
+      }
+    } else {
+      // No change; optional ack so the lecturer gets feedback
+      await sendWhatsAppText({
+        to: lecture.lecturerWhatsapp,
+        text: `ℹ️ Already ${lecture.status}.`,
+      });
+      return;
+    }
+  } else {
+    // Not an initial decision or known action; ignore
+    return;
+  }
+
+  // 7) Save lecture updates
   await lecture.save();
 
-  // Notify students only once (guarded by decisionHandled)
+  // 8) Notify students once per transition (inbound-idempotent already handled)
   if (notifyFn) {
     const students = await User.find({ class: lecture.class._id }).select(
       "whatsappNumber fullName"
@@ -372,8 +488,69 @@ async function handleLecturerButton(message) {
 // -----------------
 
 // ✅ Handle reschedule submissions
+// Place in your WhatsApp service module or near the handler
+async function sendContributionFollowUp({
+  lecture,
+  kind /* "note"|"document" */,
+}) {
+  const to = lecture.lecturerWhatsapp;
+  const lectureId = lecture._id;
 
-// ✅ Handle lecturer contributions (idempotent + dedupe)
+  // Configure button set based on what was just contributed
+  const btn =
+    kind === "note"
+      ? { id: `add_note_${lectureId}`, title: "➕ Add Note" }
+      : { id: `add_document_${lectureId}`, title: "📄 Add Document" };
+
+  const res = await sendWhatsAppText({
+    to,
+    text: "✅ Sent. Need to add anything else?",
+    buttons: [btn, { id: `no_more_${lectureId}`, title: "❌ No" }],
+  });
+
+  const waMessageId = res?.messages?.[0]?.id;
+  if (waMessageId) {
+    // Map this interactive to the lecture for future context.id correlation
+    await LectureMessage.create({
+      lectureId,
+      waMessageId,
+      recipient: to,
+      type: "contrib_followup",
+    });
+
+    // Create a pending action placeholder for button selection
+    const exists = await PendingAction.findOne({ waMessageId });
+    if (!exists) {
+      await PendingAction.create({
+        lecture: lectureId,
+        action: "awaiting_choice",
+        waMessageId,
+        status: "pending",
+        lecturerWhatsapp: to,
+      });
+    }
+  }
+}
+
+// Resolve PendingAction using context.id first, else latest-by-lecturer
+async function resolvePendingForInbound({ message, waLocal }) {
+  const ctxId = message?.context?.id; // the waMessageId of the interactive just tapped/replied-to
+  if (ctxId) {
+    const byCtx = await PendingAction.findOne({
+      waMessageId: ctxId,
+      status: "pending",
+    }).populate("lecture");
+    if (byCtx) return byCtx;
+  }
+  return await PendingAction.findOne({
+    lecturerWhatsapp: waLocal,
+    status: "pending",
+  })
+    .sort({ createdAt: -1 })
+    .populate("lecture");
+}
+
+// ✅ Handle lecturer contributions (idempotent + tolerant of awaiting_choice)
 async function handleLecturerContribution(message) {
   let waId = message.from; // e.g., '2348032532333'
   const waMessageId = message.id; // inbound WAMID
@@ -385,14 +562,8 @@ async function handleLecturerContribution(message) {
     waId = "0" + waId.slice(3); // '2348032532333' => '08032532333'
   }
 
-  // find the latest pending action for this lecturer
-  const pending = await PendingAction.findOne({
-    lecturerWhatsapp: waId,
-    status: "pending",
-  })
-    .sort({ createdAt: -1 })
-    .populate("lecture");
-
+  // Resolve pending with context-aware lookup first
+  const pending = await resolvePendingForInbound({ message, waLocal: waId });
   if (!pending) {
     console.log(
       `⚠️ No pending action found for lecturer ${waId}, ignoring message.`
@@ -409,7 +580,6 @@ async function handleLecturerContribution(message) {
       type,
     });
   } catch (err) {
-    // Duplicate key -> already processed this inbound message
     if (err && err.code === 11000) {
       console.log(`🔁 Duplicate inbound ${waMessageId} detected, skipping.`);
       return;
@@ -440,9 +610,51 @@ async function handleLecturerContribution(message) {
     return;
   }
 
+  // Normalize awaiting_* actions into concrete actions based on inbound type
+  let effectiveAction = pending.action;
+
+  if (effectiveAction === "awaiting_choice") {
+    if (type === "text") {
+      effectiveAction = "add_note";
+      pending.action = "add_note";
+      await pending.save();
+    } else if (type === "document") {
+      effectiveAction = "add_document";
+      pending.action = "add_document";
+      await pending.save();
+    } else {
+      await sendWhatsAppText({
+        to: lecture.lecturerWhatsapp,
+        text: "ℹ️ Please send a text note or upload a document.",
+      });
+      return;
+    }
+  }
+
+  if (effectiveAction === "awaiting_cancel_choice") {
+    if (type === "text") {
+      effectiveAction = "add_note";
+      pending.action = "add_note";
+      await pending.save();
+    } else if (type === "document") {
+      await sendWhatsAppText({
+        to: lecture.lecturerWhatsapp,
+        text: "ℹ️ For cancelled classes, please send a text note (documents aren’t accepted).",
+      });
+      return;
+    } else {
+      await sendWhatsAppText({
+        to: lecture.lecturerWhatsapp,
+        text: "ℹ️ Please send the cancellation note as text.",
+      });
+      return;
+    }
+  }
+
   let inserted = false;
 
-  if (pending.action === "add_note" && type === "text") {
+  if (effectiveAction === "add_note" && type === "text") {
+    // Duplicate detection (unchanged)
     const normText = (content || "").trim().replace(/\s+/g, " ");
     const exists =
       Array.isArray(lecture.notes) &&
@@ -466,18 +678,18 @@ async function handleLecturerContribution(message) {
     }
 
     if (!inserted) {
-      // Confirm to lecturer even if duplicate to avoid confusion
       await sendWhatsAppText({ to: lecture.lecturerWhatsapp, text: "✅ Sent" });
       return;
     }
 
-    // Persist the saved note before fan-out
+    // Persist before fan-out
     await lecture.save();
     await pending.save();
 
-    // Split into safe chunks that preserve layout and stay under the template body limit
-    const chunks = annotateParts(
-      packChunksPreservingLayout(content, EFFECTIVE_LIMIT)
+    // First approach: sanitize for template + chunk + annotate
+    const cleaned = sanitizeForWhatsAppTemplate(content);
+    const chunks = annotatePartsForTemplate(
+      packChunksForTemplate(cleaned, EFFECTIVE_LIMIT) // e.g., 924 headroom
     );
 
     // Fan-out: send each chunk sequentially so order is preserved per student
@@ -486,12 +698,15 @@ async function handleLecturerContribution(message) {
     }
 
     // Confirm to lecturer with part count
-    await sendWhatsAppText({
-      to: lecture.lecturerWhatsapp,
-      text: `✅ Sent${chunks.length > 1 ? ` in ${chunks.length} parts` : ""}`,
-    });
+    // await sendWhatsAppText({
+    //   to: lecture.lecturerWhatsapp,
+    //   text: `✅ Sent${chunks.length > 1 ? ` in ${chunks.length} parts` : ""}`,
+    // });
+
+    // Send interactive follow-up anchored to this lecture
+    await sendContributionFollowUp({ lecture, kind: "note" });
     return; // done with text path
-  } else if (pending.action === "add_document" && type === "document") {
+  } else if (effectiveAction === "add_document" && type === "document") {
     const exists =
       Array.isArray(lecture.documents) &&
       lecture.documents.some(
@@ -505,26 +720,25 @@ async function handleLecturerContribution(message) {
     } else {
       console.log("ℹ️ Duplicate document detected by waId, not adding.");
     }
+
+    if (inserted) {
+      await lecture.save();
+      await pending.save();
+      await notifyStudentsOfContribution(lecture, "add_document", content);
+
+      // Send interactive follow-up anchored to this lecture
+      await sendContributionFollowUp({ lecture, kind: "document" });
+    } else {
+      console.log(
+        "ℹ️ No changes persisted due to duplication; notifying lecturer only."
+      );
+      await sendWhatsAppText({ to: lecture.lecturerWhatsapp, text: "✅ Sent" });
+    }
+    return;
   } else {
-    console.log(`⚠️ Action/type mismatch: ${pending.action} vs ${type}`);
+    console.log(`⚠️ Action/type mismatch: ${effectiveAction} vs ${type}`);
     return;
   }
-
-  // Document or other paths: persist, notify once, confirm
-  if (inserted) {
-    await lecture.save();
-    await pending.save();
-    await notifyStudentsOfContribution(lecture, pending.action, content);
-  } else {
-    console.log(
-      "ℹ️ No changes persisted due to duplication; notifying lecturer only."
-    );
-  }
-
-  await sendWhatsAppText({
-    to: lecture.lecturerWhatsapp,
-    text: "✅ Sent",
-  });
 }
 
 // ✅ Handle reschedule submissions (idempotent + no-op guard)

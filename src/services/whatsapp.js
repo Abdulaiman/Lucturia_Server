@@ -697,6 +697,117 @@ async function sendLecturerFollowUp({ to, lectureId }) {
   }
 }
 
+async function sendLecturerCancelNotePrompt({ to, lectureId }) {
+  console.log("➡️ sendLecturerCancelNotePrompt called", { to, lectureId });
+  if (!to) {
+    console.error("✋ sendLecturerCancelNotePrompt: missing 'to' phone number");
+    throw new Error("Missing recipient phone number");
+  }
+  if (!process.env.WHATSAPP_PHONE_ID) {
+    console.error("✋ WHATSAPP_PHONE_ID is not set");
+  }
+  console.log("WHATSAPP_API_URL:", WHATSAPP_API_URL);
+
+  const formattedTo = (() => {
+    try {
+      return formatPhoneNumber(to);
+    } catch (e) {
+      console.error("✋ formatPhoneNumber error:", e.message);
+      throw e;
+    }
+  })();
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: formattedTo,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: {
+        text: "Class has been marked as Cancelled.\nWould you like to add a note for the students?",
+      },
+      action: {
+        buttons: [
+          {
+            type: "reply",
+            reply: { id: `add_note_cancel_${lectureId}`, title: "➕ Add Note" },
+          },
+          {
+            type: "reply",
+            reply: { id: `no_more_cancel_${lectureId}`, title: "❌ No" },
+          },
+        ],
+      },
+    },
+  };
+
+  try {
+    const response = await axios.post(WHATSAPP_API_URL, payload, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 15000,
+    });
+
+    const waMessageId = response?.data?.messages?.[0]?.id;
+    if (waMessageId) {
+      await LectureMessage.create({
+        lectureId,
+        waMessageId,
+        recipient: formattedTo,
+        type: "followup",
+      });
+
+      try {
+        const lecture = await Lecture.findById(lectureId).select(
+          "lecturer lecturerWhatsapp"
+        );
+
+        const exists = await PendingAction.findOne({ waMessageId });
+        if (!exists) {
+          await PendingAction.create({
+            lecture: lectureId,
+            action: "awaiting_choice", // awaiting button choice on cancel flow
+            waMessageId,
+            status: "pending",
+            lecturerWhatsapp: lecture?.lecturerWhatsapp,
+          });
+          console.log(
+            "🕒 PendingAction created (awaiting_cancel_choice):",
+            waMessageId
+          );
+        } else {
+          console.log(
+            "ℹ️ PendingAction already exists for waMessageId:",
+            waMessageId
+          );
+        }
+      } catch (e) {
+        console.error("❌ Failed to create PendingAction (cancel):", e);
+      }
+    }
+
+    console.log(
+      "✅ Cancel note prompt sent. response.data:",
+      JSON.stringify(response.data, null, 2)
+    );
+    return response.data;
+  } catch (err) {
+    console.error("❌ sendLecturerCancelNotePrompt - request failed");
+    if (err.response) {
+      console.error("Status:", err.response.status);
+      console.error("Headers:", err.response.headers);
+      console.error("Body:", JSON.stringify(err.response.data, null, 2));
+    } else {
+      console.error("Error message:", err.message);
+    }
+    console.error("Full error stack:", err.stack);
+    throw err;
+  }
+}
+
 /**
  * Send plain text WhatsApp message (wrapper for lecturer responses)
  */
@@ -1014,7 +1125,7 @@ async function notifyStudentsOfContribution(lecture, action, content) {
       .filter((r) => r.status === "rejected")
       .slice(0, 3)
       .map((r) => r.reason);
-    console.log(`❌ First few failures:`, failures);
+    console.log(`❌ First few failures:`, failures[0].response.data);
   }
 }
 
@@ -1101,6 +1212,7 @@ module.exports = {
   sendWhatsAppText,
   sendAuthOtpTemplate,
   getTemplates,
+  sendLecturerCancelNotePrompt,
   sendWelcomeTemplate,
   sendLecturerWelcomeTemplate,
   sendLecturerClassNotification,

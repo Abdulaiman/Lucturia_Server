@@ -75,7 +75,7 @@ exports.handleWebhook = async (req, res, next) => {
               lecturerWhatsapp: local,
               status: "pending",
             }).sort({ createdAt: -1 });
-
+            console.log(pending);
             if (pending) {
               await handleLecturerContribution(message); // idempotent by inbound WAMID
               continue; // ensures only one handler claims this WAMID
