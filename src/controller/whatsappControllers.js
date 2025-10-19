@@ -265,59 +265,59 @@ async function handleLecturerButton(message) {
       : null;
 
   // 5) Handle action-type branches first (add note / add document / no more)
+  // In handleLecturerButton, normalize to lecturerWhatsapp consistently
+  // and flip focus on "add note" / "add document"
   if (lower.includes("add note")) {
-    let pending = await PendingAction.findOne({
-      waMessageId: triggerId,
-      status: "pending",
-    });
-    if (!pending) {
-      pending = await PendingAction.findOne({
-        lecture: lecture._id,
-        status: "pending",
-      }).sort({ createdAt: -1 });
-    }
-    if (pending) {
-      pending.action = "add_note";
-      await pending.save();
-    } else {
-      await PendingAction.create({
-        lecturer: lecture.lecturerWhatsapp,
-        lecture: lecture._id,
-        action: "add_note",
-        waMessageId: triggerId,
-        status: "pending",
-      });
-    }
+    // Deactivate other pendings for this lecturer
+    await PendingAction.updateMany(
+      { lecturerWhatsapp: lecture.lecturerWhatsapp, status: "pending" },
+      { $set: { active: false } }
+    );
+
+    // Upsert the focused pending for this lecture anchored to triggerId
+    await PendingAction.findOneAndUpdate(
+      { waMessageId: triggerId }, // the message with the buttons
+      {
+        $set: {
+          lecturerWhatsapp: lecture.lecturerWhatsapp, // normalize field
+          lecture: lecture._id,
+          action: "add_note",
+          status: "pending",
+          active: true,
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
     await sendWhatsAppText({
       to: lecture.lecturerWhatsapp,
-      text: "✍️ Please type the note you’d like to add for this lecture.",
+      text: "✍️ Please type the note for this lecture. Tip: reply to this message to keep it attached.",
     });
     return;
   }
 
   if (lower.includes("add document")) {
-    let pending = await PendingAction.findOne({
-      waMessageId: triggerId,
-      status: "pending",
-    });
-    if (!pending) {
-      pending = await PendingAction.findOne({
-        lecture: lecture._id,
-        status: "pending",
-      }).sort({ createdAt: -1 });
-    }
-    if (pending) {
-      pending.action = "add_document";
-      await pending.save();
-    } else {
-      await PendingAction.create({
-        lecturer: lecture.lecturerWhatsapp,
-        lecture: lecture._id,
-        action: "add_document",
-        waMessageId: triggerId,
-        status: "pending",
-      });
-    }
+    await PendingAction.updateMany(
+      { lecturerWhatsapp: lecture.lecturerWhatsapp, status: "pending" },
+      { $set: { active: false } }
+    );
+
+    await PendingAction.findOneAndUpdate(
+      { waMessageId: triggerId },
+      {
+        $set: {
+          lecturerWhatsapp: lecture.lecturerWhatsapp,
+          lecture: lecture._id,
+          action: "add_document",
+          status: "pending",
+          active: true,
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
     await sendWhatsAppText({
       to: lecture.lecturerWhatsapp,
       text: "📄 Please upload the document file for this lecture.",
@@ -326,12 +326,14 @@ async function handleLecturerButton(message) {
   }
 
   if (lower.includes("no more")) {
+    // Close and clear focus for whichever pending is tied to this trigger
     const pending = await PendingAction.findOne({
       waMessageId: triggerId,
       status: "pending",
     });
     if (pending) {
       pending.status = "closed";
+      pending.active = false;
       await pending.save();
     }
     await sendWhatsAppText({
@@ -408,85 +410,6 @@ async function handleLecturerButton(message) {
   }
 }
 
-// async function handleLecturerContribution(message) {
-//   let waId = message.from; // e.g., '2348032532333'
-//   const waMessageId = message.id;
-//   let content = null;
-//   const type = message.type;
-
-//   // convert incoming number to local 11-digit format
-//   if (waId.startsWith("234") && waId.length === 13) {
-//     waId = "0" + waId.slice(3); // '2348032532333' => '08032532333'
-//   }
-
-//   // find the latest pending action for this lecturer
-//   const pending = await PendingAction.findOne({
-//     lecturerWhatsapp: waId,
-//     status: "pending",
-//   })
-//     .sort({ createdAt: -1 })
-//     .populate("lecture");
-
-//   if (!pending) {
-//     console.log(
-//       `⚠️ No pending action found for lecturer ${waId}, ignoring message.`
-//     );
-//     return;
-//   }
-
-//   // capture the content
-//   if (type === "text") {
-//     content = message.text.body;
-//     console.log(`📝 Lecturer note captured: ${content}`);
-//   } else if (type === "document") {
-//     content = {
-//       waId: message.document.id, // ✅ renamed for consistency
-//       fileName: message.document.filename,
-//       mimeType: message.document.mime_type,
-//     };
-//     console.log(`📄 Lecturer uploaded document: ${content.fileName}`);
-//   } else {
-//     console.log(`⚠️ Unsupported message type from lecturer: ${type}`);
-//     return;
-//   }
-
-//   // save to lecture
-//   const lecture = pending.lecture;
-//   if (!lecture) {
-//     console.log(`⚠️ Pending action has no linked lecture, ignoring.`);
-//     return;
-//   }
-
-//   if (pending.action === "add_note" && type === "text") {
-//     lecture.notes = lecture.notes || [];
-//     lecture.notes.push({
-//       text: content,
-//       addedBy: waId,
-//       createdAt: new Date(),
-//     });
-//   } else if (pending.action === "add_document" && type === "document") {
-//     lecture.documents = lecture.documents || [];
-//     lecture.documents.push(content); // ✅ already structured with waId/fileName/mimeType
-//   }
-
-//   await lecture.save();
-
-//   await pending.save();
-
-//   // notify students with the *same content shape* you just saved
-//   await notifyStudentsOfContribution(lecture, pending.action, content);
-
-//   // confirm to lecturer
-//   await sendWhatsAppText({
-//     to: lecture.lecturerWhatsapp,
-//     text: "✅ Sent",
-//   });
-// }
-
-// -----------------
-// Handle reschedule submissions (unchanged)
-// -----------------
-
 // ✅ Handle reschedule submissions
 // Place in your WhatsApp service module or near the handler
 async function sendContributionFollowUp({
@@ -533,8 +456,9 @@ async function sendContributionFollowUp({
 }
 
 // Resolve PendingAction using context.id first, else latest-by-lecturer
+// Prefer context.id -> active:true -> latest pending
 async function resolvePendingForInbound({ message, waLocal }) {
-  const ctxId = message?.context?.id; // the waMessageId of the interactive just tapped/replied-to
+  const ctxId = message?.context?.id;
   if (ctxId) {
     const byCtx = await PendingAction.findOne({
       waMessageId: ctxId,
@@ -542,11 +466,23 @@ async function resolvePendingForInbound({ message, waLocal }) {
     }).populate("lecture");
     if (byCtx) return byCtx;
   }
+
+  const now = new Date();
+  const focused = await PendingAction.findOne({
+    lecturerWhatsapp: waLocal,
+    status: "pending",
+    active: true,
+    $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+  })
+    .sort({ updatedAt: -1 })
+    .populate("lecture");
+  if (focused) return focused;
+
   return await PendingAction.findOne({
     lecturerWhatsapp: waLocal,
     status: "pending",
   })
-    .sort({ createdAt: -1 })
+    .sort({ updatedAt: -1 })
     .populate("lecture");
 }
 

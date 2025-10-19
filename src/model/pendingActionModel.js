@@ -8,8 +8,12 @@ const pendingActionSchema = new mongoose.Schema({
     enum: ["add_note", "add_document", "awaiting_choice"],
   },
   waMessageId: String, // optional, link to WhatsApp message
-  status: { type: String, enum: ["pending", "completed"], default: "pending" },
-
+  status: {
+    type: String,
+    enum: ["pending", "completed", "active"],
+    default: "pending",
+  },
+  active: { type: Boolean },
   lecturer: { type: String },
   lecturerWhatsapp: { type: String },
   createdAt: { type: Date, default: Date.now },
