@@ -9,6 +9,7 @@ const {
   sendStudentClassCancelled,
   sendStudentClassRescheduled,
   sendStudentClassConfirmed,
+  sendWhatsAppMessage,
 } = require("../services/whatsapp");
 const { getFirstName } = require("../../utils/helpers");
 
@@ -421,5 +422,79 @@ exports.remindLecturer = catchAsync(async (req, res, next) => {
   return res.status(200).json({
     status: "success",
     data: { lectureId, delivery },
+  });
+});
+
+// controllers/lectureController.js
+// controllers/lectureController.js
+exports.announceOngoing = catchAsync(async (req, res, next) => {
+  const lectureId = req.params.id;
+
+  // Verify lecture exists and is today in Africa/Lagos
+  const nowLagos = dayjs().tz("Africa/Lagos");
+  let lecture = await Lecture.findById(lectureId);
+  if (!lecture) return next(new AppError("Lecture not found", 404));
+
+  const isToday = dayjs(lecture.startTime)
+    .tz("Africa/Lagos")
+    .isSame(nowLagos, "day");
+  if (!isToday)
+    return next(new AppError("Announcements only for today's lectures", 400));
+
+  // Authorization: user must belong to this class
+  // if (!req.user || String(req.user.class) !== String(lecture.class)) {
+  //   return next(new AppError("Not allowed for this class", 403));
+  // }
+
+  // Atomic “first click wins”
+  lecture = await Lecture.findOneAndUpdate(
+    { _id: lectureId, "announcement.sent": { $ne: true } },
+    {
+      $set: {
+        "announcement.sent": true,
+        "announcement.sentAt": new Date(),
+      },
+    },
+    { new: true }
+  );
+  if (!lecture)
+    return next(
+      new AppError("Announcement already sent for this lecture", 409)
+    );
+
+  // Build Lagos-local text + single OK button
+  const startTime = dayjs(lecture.startTime).tz("Africa/Lagos").format("HH:mm");
+  const endTime = dayjs(lecture.endTime).tz("Africa/Lagos").format("HH:mm");
+  const msg =
+    `📣 Class update: ${lecture.course} with ${lecture.lecturer} is now *ONGOING*` +
+    `${
+      lecture.location ? ` at ${lecture.location}` : ""
+    } (${startTime}–${endTime}).`; // <= 1024 chars
+  const buttons = [{ id: `ok_${lecture._id}`, title: "OK" }]; // <= 3 buttons, <= 20 chars each
+
+  const students = await User.find({ class: lecture.class }).select(
+    "whatsappNumber fullName"
+  );
+
+  // Fan-out using session messages (interactive with OK; fallback to plain text if interactive fails)
+  const jobs = students.map(async (s) => {
+    try {
+      return await sendWhatsAppText({
+        to: s.whatsappNumber,
+        text: msg,
+        buttons,
+      });
+    } catch {
+      // Plain text fallback (still requires session window)
+      return await sendWhatsAppMessage({ to: s.whatsappNumber, text: msg });
+    }
+  });
+
+  const results = await Promise.allSettled(jobs);
+  const delivered = results.filter((r) => r.status === "fulfilled").length;
+
+  return res.status(200).json({
+    status: "success",
+    data: { delivered, total: students.length },
   });
 });

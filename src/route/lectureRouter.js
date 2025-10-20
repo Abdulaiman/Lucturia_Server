@@ -7,6 +7,7 @@ const {
   updateLecture,
   deleteLecture,
   remindLecturer,
+  announceOngoing,
 } = require("../controller/lectureController");
 
 const router = express.Router();
@@ -30,5 +31,7 @@ router.patch("/:id", updateLecture);
 router.delete("/:id", deleteLecture);
 
 router.post("/remind/:id", remindLecturer);
+
+router.post("/announce/:id", announceOngoing);
 
 module.exports = router;

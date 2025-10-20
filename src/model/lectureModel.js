@@ -11,6 +11,14 @@ const documentSchema = new mongoose.Schema(
   },
   { _id: false }
 );
+const announcementSchema = new mongoose.Schema(
+  {
+    sent: { type: Boolean, default: false },
+    sentAt: { type: Date },
+    sentBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  },
+  { _id: false }
+);
 
 const noteSchema = new mongoose.Schema(
   {
@@ -64,6 +72,7 @@ const lectureSchema = new mongoose.Schema(
       required: true,
     },
     reminder: { type: reminderSchema, default: () => ({}) }, // <-- NEW
+    announcement: { type: announcementSchema, default: () => ({}) },
   },
   { timestamps: true }
 );
