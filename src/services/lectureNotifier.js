@@ -10,7 +10,7 @@ dayjs.extend(timezone);
 
 // Schedule daily at 7:30 PM Lagos time
 const lectureNotifierJob = cron.schedule(
-  "46 20 * * *", // 19:30 = 7:30 PM
+  "56 20 * * *", // 19:30 = 7:30 PM
   async () => {
     console.log("📤 Running lecture notification job...");
 
