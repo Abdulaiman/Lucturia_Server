@@ -12,6 +12,7 @@ const AppError = require("../../utils/app-error");
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
 const WABA_ID = process.env.WABA_ID;
+const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 
 const WHATSAPP_API_URL = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_ID}/messages`;
 const TEMPLATE_API_URL = `https://graph.facebook.com/v21.0/${WABA_ID}/message_templates`;
@@ -19,6 +20,61 @@ const TEMPLATE_API_URL = `https://graph.facebook.com/v21.0/${WABA_ID}/message_te
 /**
  * Format phone number to international format (Nigeria only)
  */
+
+async function hasActiveSession(phoneNumber) {
+  try {
+    // Normalize to local format (08012345678)
+    let local = phoneNumber;
+    if (phoneNumber.startsWith("234") && phoneNumber.length === 13) {
+      local = "0" + phoneNumber.slice(3);
+    }
+
+    const user = await User.findOne({ whatsappNumber: local }).select(
+      "lastMessageTime"
+    );
+
+    if (!user || !user.lastMessageTime) {
+      return false; // No session recorded
+    }
+
+    const elapsed = Date.now() - user.lastMessageTime;
+    return elapsed < TWENTY_FOUR_HOURS;
+  } catch (err) {
+    console.error("❌ hasActiveSession error:", err.message);
+    return false; // Default to template if check fails
+  }
+}
+
+/**
+ * Smart send: uses free message if session exists, template otherwise
+ */
+/**
+ * Smart send: uses free message if session exists, template otherwise
+ */
+async function sendSmartMessage({
+  to,
+  freeText,
+  freeButtons = null, // ✅ NEW: optional buttons for free message
+  templateFn,
+  templateParams,
+}) {
+  const hasSession = await hasActiveSession(to);
+
+  if (hasSession) {
+    // Send as free text message with optional buttons
+    console.log(`✅ Active session found for ${to} - sending free message`);
+    return await sendWhatsAppText({
+      to,
+      text: freeText,
+      buttons: freeButtons, // ✅ Pass buttons through
+    });
+  } else {
+    // Send as template
+    console.log(`📋 No session for ${to} - sending template`);
+    return await templateFn(templateParams);
+  }
+}
+
 function formatPhoneNumber(phone) {
   let cleaned = phone
     .toString()
@@ -406,7 +462,7 @@ async function sendStudentClassConfirmed({
       to: formattedTo,
       type: "template",
       template: {
-        name: "student_class_notification_confirmed",
+        name: "student_class_confirmed",
         language: { code: "en_US" },
         components: [
           {
@@ -1087,25 +1143,58 @@ async function notifyStudentsOfContribution(lecture, action, content) {
 
   for (const student of students) {
     if (action === "add_note") {
-      tasks.push(
-        sendLecturerUpdateNoteTemplate({
-          to: student.whatsappNumber,
-          course: lecture.course,
-          lecturerName: lecture.lecturer,
-          noteText: content,
-        })
-      );
+      // Check session for each student
+      const hasSession = await hasActiveSession(student.whatsappNumber);
+
+      if (hasSession) {
+        // ✅ FREE MESSAGE - Send full note in one message (no chunking!)
+        const message = `📝 *New note for ${lecture.course}* from ${lecture.lecturer}:\n\n${content}`;
+
+        tasks.push(
+          sendWhatsAppText({
+            to: student.whatsappNumber,
+            text: message,
+          })
+        );
+      } else {
+        // ❌ TEMPLATE - Must chunk and send parts
+        tasks.push(
+          sendLecturerUpdateNoteTemplate({
+            to: student.whatsappNumber,
+            course: lecture.course,
+            lecturerName: lecture.lecturer,
+            noteText: content, // already chunked/sanitized by caller
+          })
+        );
+      }
     } else if (action === "add_document") {
-      tasks.push(
-        sendLecturerUpdateDocumentTemplate({
-          to: student.whatsappNumber,
-          course: lecture.course,
-          lecturerName: lecture.lecturer,
-          sourceMediaId: content.waId,
-          filename: content.fileName,
-          mimeType: content.mimeType,
-        })
-      );
+      // Check session for each student
+      const hasSession = await hasActiveSession(student.whatsappNumber);
+
+      if (hasSession) {
+        // ✅ FREE MESSAGE - Send document directly
+        tasks.push(
+          sendWhatsAppDocument({
+            to: student.whatsappNumber,
+            documentId: content.waId,
+            filename: content.fileName,
+            mimeType: content.mimeType,
+            caption: `📄 New document for *${lecture.course}* from ${lecture.lecturer}`,
+          })
+        );
+      } else {
+        // ❌ TEMPLATE - Send via document template
+        tasks.push(
+          sendLecturerUpdateDocumentTemplate({
+            to: student.whatsappNumber,
+            course: lecture.course,
+            lecturerName: lecture.lecturer,
+            sourceMediaId: content.waId,
+            filename: content.fileName,
+            mimeType: content.mimeType,
+          })
+        );
+      }
     }
   }
 
@@ -1125,7 +1214,10 @@ async function notifyStudentsOfContribution(lecture, action, content) {
       .filter((r) => r.status === "rejected")
       .slice(0, 3)
       .map((r) => r.reason);
-    console.log(`❌ First few failures:`, failures[0].response.data);
+    console.log(
+      `❌ First few failures:`,
+      failures[0]?.response?.data || failures[0]?.message
+    );
   }
 }
 
@@ -1207,6 +1299,204 @@ async function sendNoLectureNotificationTemplate({ to, fullname }) {
   return response.data;
 }
 
+/**
+ * Send "schedule ready" template with View button
+ */
+async function sendScheduleReadyTemplate({ to, studentName }) {
+  const formattedTo = formatPhoneNumber(to);
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: formattedTo,
+    type: "template",
+    template: {
+      name: "student_schedule_ready",
+      language: { code: "en_US" },
+      components: [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: studentName }, // {{1}}
+          ],
+        },
+        {
+          type: "button",
+          sub_type: "quick_reply",
+          index: "0",
+        },
+      ],
+    },
+  };
+
+  try {
+    const response = await axios.post(WHATSAPP_API_URL, payload, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+    console.log("✅ Schedule ready template sent:", response.data);
+    return response.data;
+  } catch (err) {
+    console.error(
+      "❌ sendScheduleReadyTemplate error:",
+      err.response?.data || err.message
+    );
+    throw new AppError("Failed to send schedule ready template", 500);
+  }
+}
+
+/**
+ * Smart student class confirmed - auto-detects session
+ */
+async function sendStudentClassConfirmedSmart({
+  to,
+  studentName,
+  course,
+  lecturerName,
+  startTime,
+  endTime,
+  location,
+}) {
+  const hasSession = await hasActiveSession(to);
+
+  if (hasSession) {
+    // Free message version
+    const message = `Hi ${studentName}! 👋
+
+Your class has been confirmed ✅
+
+📚 *Course:* ${course}
+👨‍🏫 *Lecturer:* ${lecturerName}
+🕐 *Time:* ${startTime} - ${endTime}
+📍 *Location:* ${location}
+
+See you in class!`;
+
+    return await sendWhatsAppText({
+      to,
+      text: message,
+      buttons: [
+        { id: "got_it_confirmed", title: "✅ Got it" },
+        { id: "need_help_confirmed", title: "❓ Need help" },
+      ],
+    });
+  } else {
+    // Template version (paid)
+    return await sendStudentClassConfirmed({
+      to,
+      studentName,
+      course,
+      lecturerName,
+      startTime,
+      endTime,
+      location,
+    });
+  }
+}
+
+/**
+ * Smart student class cancelled - auto-detects session
+ */
+async function sendStudentClassCancelledSmart({
+  to,
+  studentName,
+  course,
+  lecturerName,
+  startTime,
+  endTime,
+  location,
+}) {
+  const hasSession = await hasActiveSession(to);
+
+  if (hasSession) {
+    // Free message version
+    const message = `Hi ${studentName},
+
+Unfortunately, your class has been cancelled ❌
+
+📚 *Course:* ${course}
+👨‍🏫 *Lecturer:* ${lecturerName}
+🕐 *Original Time:* ${startTime} - ${endTime}
+📍 *Location:* ${location}
+
+We apologize for any inconvenience. Please stay tuned for updates.`;
+
+    return await sendWhatsAppText({
+      to,
+      text: message,
+      buttons: [
+        { id: "got_it_cancelled", title: "👌 Got it" },
+        { id: "need_help_cancelled", title: "❓ Need help" },
+      ],
+    });
+  } else {
+    // Template version (paid)
+    return await sendStudentClassCancelled({
+      to,
+      studentName,
+      course,
+      lecturerName,
+      startTime,
+      endTime,
+      location,
+    });
+  }
+}
+
+/**
+ * Smart student class rescheduled - auto-detects session
+ */
+async function sendStudentClassRescheduledSmart({
+  to,
+  studentName,
+  course,
+  lecturerName,
+  newDate,
+  startTime,
+  endTime,
+  location,
+  note,
+}) {
+  const hasSession = await hasActiveSession(to);
+
+  if (hasSession) {
+    // Free message version
+    let message = `Hi ${studentName},
+
+Your class has been rescheduled 📅
+
+📚 *Course:* ${course}
+👨‍🏫 *Lecturer:* ${lecturerName}
+📆 *New Date:* ${newDate}
+🕐 *New Time:* ${startTime} - ${endTime}
+📍 *Location:* ${location}`;
+
+    if (note && note !== "No additional notes.") {
+      message += `\n\n📝 *Note:* ${note}`;
+    }
+
+    return await sendWhatsAppText({
+      to,
+      text: message,
+    });
+  } else {
+    // Template version (paid)
+    return await sendStudentClassRescheduled({
+      to,
+      studentName,
+      course,
+      lecturerName,
+      newDate,
+      startTime,
+      endTime,
+      location,
+      note,
+    });
+  }
+}
+
 module.exports = {
   sendWhatsAppMessage,
   sendWhatsAppText,
@@ -1223,4 +1513,9 @@ module.exports = {
   notifyStudentsOfContribution,
   sendLecturerReminderTemplate,
   sendNoLectureNotificationTemplate,
+  sendScheduleReadyTemplate,
+  hasActiveSession,
+  sendStudentClassConfirmedSmart, // ✅ NEW
+  sendStudentClassCancelledSmart, // ✅ NEW
+  sendStudentClassRescheduledSmart,
 };

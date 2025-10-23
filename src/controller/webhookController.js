@@ -11,6 +11,7 @@ const {
   handleLecturerContribution,
   handleStudentKeywordSummary,
   handleClassRepBroadcast,
+  handleStudentViewSchedule,
 } = require("./whatsappControllers");
 
 // Helpers (local; keep consistent with your shared utils if needed)
@@ -32,6 +33,21 @@ function formatTime(date) {
     minute: "2-digit",
     hour12: true, // toggle if you prefer 24h
   });
+}
+
+// Add near other helper functions (toLocalMsisdn, getFirstName, etc.)
+async function updateUserSession(phoneNumber) {
+  const local = toLocalMsisdn(phoneNumber);
+  try {
+    await User.findOneAndUpdate(
+      { whatsappNumber: local },
+      { $set: { lastMessageTime: Date.now() } },
+      { upsert: false }
+    );
+    console.log(`🔄 Session updated for ${local}`);
+  } catch (err) {
+    console.error(`❌ Failed to update session for ${local}:`, err.message);
+  }
 }
 
 // Handle webhook verification
@@ -61,6 +77,7 @@ exports.handleWebhook = async (req, res, next) => {
         if (!change.value.messages) continue;
 
         for (const message of change.value.messages) {
+          await updateUserSession(message.from);
           // 0) Exact keyword: "summary" (case-insensitive)
           if (message.type === "text") {
             const bodyText = (message.text?.body || "").trim();
@@ -75,7 +92,6 @@ exports.handleWebhook = async (req, res, next) => {
               lecturerWhatsapp: local,
               status: "pending",
             }).sort({ createdAt: -1 });
-            console.log(pending);
             if (pending) {
               await handleLecturerContribution(message); // idempotent by inbound WAMID
               continue; // ensures only one handler claims this WAMID
@@ -92,6 +108,7 @@ exports.handleWebhook = async (req, res, next) => {
               message.interactive?.type === "button_reply")
           ) {
             await handleLecturerButton(message);
+            await handleStudentViewSchedule(message);
           }
 
           // 2) Lecturer reschedule flow (NFM reply)

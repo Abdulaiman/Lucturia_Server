@@ -13,6 +13,10 @@ const {
   sendWhatsAppText,
   notifyStudentsOfContribution,
   sendLecturerCancelNotePrompt,
+  sendStudentClassConfirmedSmart,
+  sendStudentClassCancelledSmart,
+  sendStudentClassRescheduledSmart,
+  hasActiveSession,
 } = require("../services/whatsapp");
 const { getFirstName, formatTime } = require("../../utils/helpers");
 
@@ -204,30 +208,14 @@ function annotatePartsForTemplate(chunks) {
 
 // ✅ Handle button replies from lecturers
 async function handleLecturerButton(message) {
-  // 0) Idempotency by inbound WAMID (process each button press once)
-  const inboundId = message?.id; // inbound wamid for this button reply
+  const inboundId = message?.id;
   if (!inboundId) return;
-
-  try {
-    await ProcessedInbound.create({
-      waMessageId: inboundId,
-      from: message.from, // optional
-      type: "button",
-      // lectureId can be added later if you prefer updating after fetch
-    });
-  } catch (e) {
-    if (e && e.code === 11000) {
-      // duplicate inbound event -> already processed
-      return;
-    }
-    throw e;
-  }
 
   // 1) Anchor to the original template message that had the buttons
   const triggerId = message?.context?.id;
-  if (!triggerId) return; // nothing to correlate
+  if (!triggerId) return;
 
-  // 2) Normalize reply
+  // 2) Normalize reply EARLY (before idempotency check)
   let reply = "";
   if (message.type === "button" && message.button) {
     reply = message.button.text || message.button.payload;
@@ -241,18 +229,38 @@ async function handleLecturerButton(message) {
   }
   if (!reply) return;
 
+  const lower = reply.toLowerCase();
+
+  // ✅ Exit early if this is a STUDENT button
+  if (lower.includes("view schedule") || lower.includes("view_schedule")) {
+    return; // Let handleStudentViewSchedule handle it
+  }
+
   // 3) Fetch the lecture via the message sent earlier
   const lectureMessage = await LectureMessage.findOne({
     waMessageId: triggerId,
   });
-  if (!lectureMessage) return;
+  if (!lectureMessage) return; // Not a lecturer button, exit early
+
+  // ✅ NOW do idempotency check (only for actual lecturer buttons)
+  try {
+    await ProcessedInbound.create({
+      waMessageId: inboundId,
+      from: message.from,
+      type: "button_lecturer",
+    });
+  } catch (e) {
+    if (e && e.code === 11000) {
+      // duplicate inbound event -> already processed
+      return;
+    }
+    throw e;
+  }
 
   const lecture = await Lecture.findById(lectureMessage.lectureId).populate(
     "class"
   );
   if (!lecture) return;
-
-  const lower = reply.toLowerCase();
 
   // 4) Map to desired status/action (explicit state transition)
   const desired =
@@ -265,9 +273,6 @@ async function handleLecturerButton(message) {
       : null;
 
   // 5) Handle action-type branches first (add note / add document / no more)
-  // In handleLecturerButton, normalize to lecturerWhatsapp consistently
-  // and flip focus on "add note" / "add document"
-  // In handleLecturerButton: flip persistent focus with no expiresAt
   if (lower.includes("add note")) {
     await PendingAction.updateMany(
       { lecturerWhatsapp: lecture.lecturerWhatsapp, status: "pending" },
@@ -282,7 +287,7 @@ async function handleLecturerButton(message) {
           lecture: lecture._id,
           action: "add_note",
           status: "pending",
-          active: true, // persistent focus
+          active: true,
         },
       },
       { upsert: true, new: true }
@@ -309,7 +314,7 @@ async function handleLecturerButton(message) {
           lecture: lecture._id,
           action: "add_document",
           status: "pending",
-          active: true, // persistent focus
+          active: true,
         },
       },
       { upsert: true, new: true }
@@ -329,7 +334,7 @@ async function handleLecturerButton(message) {
     });
     if (pending) {
       pending.status = "closed";
-      pending.active = false; // clear focus
+      pending.active = false;
       await pending.save();
     }
     await sendWhatsAppText({
@@ -340,12 +345,10 @@ async function handleLecturerButton(message) {
   }
 
   // 6) Initial decision transitions (Confirmed/Cancelled/Rescheduled)
-  // Allow transitions even if same triggerId; guard duplicates by inboundId above.
   let status = "";
   let notifyFn = null;
 
   if (desired) {
-    // Only transition if it's different from current status
     if (lecture.status !== desired) {
       if (desired === "Confirmed") {
         lecture.status = "Confirmed";
@@ -368,10 +371,8 @@ async function handleLecturerButton(message) {
       } else if (desired === "Rescheduled") {
         lecture.status = "Rescheduled";
         status = "Rescheduled 📅";
-        // You can prompt for new time/date here if needed
       }
     } else {
-      // No change; optional ack so the lecturer gets feedback
       await sendWhatsAppText({
         to: lecture.lecturerWhatsapp,
         text: `ℹ️ Already ${lecture.status}.`,
@@ -379,29 +380,41 @@ async function handleLecturerButton(message) {
       return;
     }
   } else {
-    // Not an initial decision or known action; ignore
     return;
   }
 
   // 7) Save lecture updates
   await lecture.save();
 
-  // 8) Notify students once per transition (inbound-idempotent already handled)
+  // 8) Notify students once per transition
   if (notifyFn) {
     const students = await User.find({ class: lecture.class._id }).select(
       "whatsappNumber fullName"
     );
+
+    // Use smart functions that auto-detect sessions
     for (const student of students) {
-      await notifyFn({
-        to: student.whatsappNumber,
-        studentName: getFirstName(student.fullName),
-        status,
-        course: lecture.course,
-        lecturerName: lecture.lecturer,
-        startTime: formatTime(lecture.startTime),
-        endTime: formatTime(lecture.endTime),
-        location: lecture.location,
-      });
+      if (desired === "Confirmed") {
+        await sendStudentClassConfirmedSmart({
+          to: student.whatsappNumber,
+          studentName: getFirstName(student.fullName),
+          course: lecture.course,
+          lecturerName: lecture.lecturer,
+          startTime: formatTime(lecture.startTime),
+          endTime: formatTime(lecture.endTime),
+          location: lecture.location,
+        });
+      } else if (desired === "Cancelled") {
+        await sendStudentClassCancelledSmart({
+          to: student.whatsappNumber,
+          studentName: getFirstName(student.fullName),
+          course: lecture.course,
+          lecturerName: lecture.lecturer,
+          startTime: formatTime(lecture.startTime),
+          endTime: formatTime(lecture.endTime),
+          location: lecture.location,
+        });
+      }
     }
   }
 }
@@ -615,22 +628,43 @@ async function handleLecturerContribution(message) {
     await lecture.save();
     await pending.save();
 
-    // First approach: sanitize for template + chunk + annotate
-    const cleaned = sanitizeForWhatsAppTemplate(content);
-    const chunks = annotatePartsForTemplate(
-      packChunksForTemplate(cleaned, EFFECTIVE_LIMIT) // e.g., 924 headroom
+    // ✅ NEW APPROACH: Check session mix and send accordingly
+    const students = await User.find({ class: lecture.class }).select(
+      "whatsappNumber fullName"
     );
 
-    // Fan-out: send each chunk sequentially so order is preserved per student
-    for (const part of chunks) {
-      await notifyStudentsOfContribution(lecture, "add_note", part);
+    let sessionCount = 0;
+    let templateCount = 0;
+
+    // Check how many students have sessions
+    for (const student of students) {
+      const hasSession = await hasActiveSession(student.whatsappNumber);
+      if (hasSession) {
+        sessionCount++;
+      } else {
+        templateCount++;
+      }
     }
 
-    // Confirm to lecturer with part count
-    // await sendWhatsAppText({
-    //   to: lecture.lecturerWhatsapp,
-    //   text: `✅ Sent${chunks.length > 1 ? ` in ${chunks.length} parts` : ""}`,
-    // });
+    console.log(
+      `📊 Session split: ${sessionCount} with session, ${templateCount} without`
+    );
+
+    if (templateCount > 0) {
+      // Some students need templates - chunk for them
+      const cleaned = sanitizeForWhatsAppTemplate(content);
+      const chunks = annotatePartsForTemplate(
+        packChunksForTemplate(cleaned, EFFECTIVE_LIMIT)
+      );
+
+      // Send each chunk
+      for (const part of chunks) {
+        await notifyStudentsOfContribution(lecture, "add_note", part);
+      }
+    } else {
+      // All students have sessions - send full note once
+      await notifyStudentsOfContribution(lecture, "add_note", content);
+    }
 
     // Send interactive follow-up anchored to this lecture
     await sendContributionFollowUp({ lecture, kind: "note" });
@@ -744,7 +778,7 @@ async function handleLecturerReschedule(message) {
   );
 
   for (const student of students) {
-    await sendStudentClassRescheduled({
+    await sendStudentClassRescheduledSmart({
       to: student.whatsappNumber,
       studentName: getFirstName(student.fullName),
       course: lecture.course,
@@ -974,10 +1008,117 @@ async function handleClassRepBroadcast(message) {
   });
 }
 
+async function handleStudentViewSchedule(message) {
+  // Extract button reply
+  let reply = "";
+  if (message.type === "button" && message.button) {
+    reply = message.button.text || message.button.payload;
+  } else if (
+    message.type === "interactive" &&
+    message.interactive?.type === "button_reply"
+  ) {
+    reply =
+      message.interactive.button_reply.title ||
+      message.interactive.button_reply.id;
+  }
+
+  const lower = (reply || "").toLowerCase();
+
+  // Only handle "view schedule" clicks
+  if (!lower.includes("view schedule") && !lower.includes("view_schedule")) {
+    return; // Not our button, skip silently
+  }
+
+  // Idempotency check
+  const inboundId = message.id;
+  try {
+    await ProcessedInbound.create({
+      waMessageId: inboundId,
+      from: message.from,
+      type: "button_view_schedule",
+    });
+  } catch (e) {
+    if (e && e.code === 11000) {
+      console.log(`🔁 Duplicate view schedule ${inboundId}, skipping.`);
+      return;
+    }
+    throw e;
+  }
+
+  // Get student info
+  const local = toLocalMsisdn(message.from);
+  const student = await User.findOne({ whatsappNumber: local }).populate(
+    "class"
+  );
+
+  if (!student || !student.class) {
+    await sendWhatsAppText({
+      to: local,
+      text: "⚠️ Could not find your class information. Please contact support.",
+    });
+    return;
+  }
+
+  // Fetch today's lectures
+  const todayStart = dayjs().tz("Africa/Lagos").startOf("day").toDate();
+  const todayEnd = dayjs().tz("Africa/Lagos").endOf("day").toDate();
+
+  const lectures = await Lecture.find({
+    class: student.class._id,
+    startTime: { $gte: todayStart, $lte: todayEnd },
+  });
+
+  if (!lectures.length) {
+    await sendWhatsAppText({
+      to: student.whatsappNumber,
+      text: `📌 Hi ${student.fullName}, You have no lectures today!`,
+    });
+    return;
+  }
+
+  // Build full schedule message
+  let scheduleText = `📚 Hello ${
+    student.fullName
+  }, here's your schedule for ${formatLagosDate(new Date())}:\n\n`;
+
+  lectures.forEach((lec, i) => {
+    const start = formatLagosTime(lec.startTime);
+    const end = formatLagosTime(lec.endTime);
+    const status = (lec.status || "").toLowerCase();
+
+    let statusText = "⏳ Pending lecturer's response";
+    if (status === "confirmed") statusText = "✅ Confirmed";
+    else if (status === "cancelled") statusText = "❌ Cancelled";
+    else if (status === "rescheduled") {
+      const newDate = formatLagosDate(lec.startTime);
+      statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
+    }
+
+    scheduleText += `${i + 1}. ${lec.course} by ${
+      lec.lecturer
+    } (${start}-${end}) - ${statusText}\n`;
+  });
+
+  // Send as FREE message (session already open from button click)
+  await sendWhatsAppText({
+    to: student.whatsappNumber,
+    text: scheduleText,
+    buttons: [
+      {
+        id: "Got_it",
+        title: "Got it",
+      },
+    ],
+  });
+
+  console.log(`✅ Full schedule sent to ${student.fullName}`);
+}
+
 module.exports = {
   handleLecturerButton,
   handleLecturerReschedule,
   handleLecturerContribution,
   handleStudentKeywordSummary,
   handleClassRepBroadcast,
+  handleStudentViewSchedule,
 };

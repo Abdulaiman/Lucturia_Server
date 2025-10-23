@@ -20,6 +20,7 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Class",
     },
+    lastMessageTime: { type: Number, default: null }, // ✅ NEW FIELD
   },
   { timestamps: true }
 );

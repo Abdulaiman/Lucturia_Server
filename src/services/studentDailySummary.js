@@ -7,10 +7,11 @@ const User = require("../model/userModel");
 const {
   sendWhatsAppText,
   sendNoLectureNotificationTemplate,
-} = require("./whatsapp"); // your helper
+  sendScheduleReadyTemplate, // ✅ NEW
+  hasActiveSession, // ✅ NEW
+} = require("./whatsapp");
 const PendingAction = require("../model/pendingActionModel");
 
-// extend dayjs
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
@@ -20,6 +21,12 @@ function formatLagosTime(date) {
 
 function formatLagosDate(date) {
   return dayjs(date).tz("Africa/Lagos").format("dddd, MMM D YYYY");
+}
+
+function getFirstName(fullName) {
+  if (!fullName) return "";
+  const first = fullName.trim().split(" ")[0];
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 }
 
 // 6AM daily (local Africa/Lagos time)
@@ -42,66 +49,59 @@ const studentDailySummaryJob = cron.schedule(
           startTime: { $gte: todayStart, $lte: todayEnd },
         });
 
+        // ✅ Check if user has active session
+        const hasSession = await hasActiveSession(student.whatsappNumber);
+
+        // ========== NO LECTURES SCENARIO ==========
         if (!lectures.length) {
-          // await sendNoLectureNotificationTemplate({
-          //   to: student.whatsappNumber,
-          //   fullname: student.fullName,
-          // });
-          await sendWhatsAppText({
-            to: student.whatsappNumber,
-            text: `📌 Hi ${student.fullName}, the timetable for today’s lecture hasn’t been released yet—please contact your class reps for updates.`,
-            buttons: [
-              {
-                id: "remind_tomorrow",
-                title: "🔔 Remind me tomorrow",
-              },
-            ],
-          });
+          if (hasSession) {
+            // Free message (no cost)
+            await sendWhatsAppText({
+              to: student.whatsappNumber,
+              text: `📌 Hi ${student.fullName}, the timetable for today's lecture hasn't been released yet—please contact your class reps for updates.`,
+              buttons: [
+                {
+                  id: "remind_tomorrow",
+                  title: "🔔 Remind me tomorrow",
+                },
+              ],
+            });
+          } else {
+            // Template (costs money)
+            await sendNoLectureNotificationTemplate({
+              to: student.whatsappNumber,
+              fullname: student.fullName,
+            });
+          }
+          console.log(`✅ No lecture message sent to ${student.fullName}`);
           continue;
         }
 
-        let message = `📚 Hello ${student.fullName}, here’s your schedule for today:\n\n`;
+        // ========== HAS LECTURES SCENARIO ==========
+        // Send SHORT "schedule ready" prompt only
+        const firstName = getFirstName(student.fullName);
 
-        lectures.forEach((lec, i) => {
-          const start = formatLagosTime(lec.startTime);
-          const end = formatLagosTime(lec.endTime);
-
-          const status = lec.status.toLowerCase();
-          let statusText;
-          if (status === "confirmed") statusText = "✅ Confirmed";
-          else if (status === "cancelled") statusText = "❌ Cancelled";
-          else if (status === "rescheduled") {
-            const newDate = formatLagosDate(lec.startTime);
-            statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
-          } else statusText = "⏳ Pending lecturer's response";
-
-          message += `${i + 1}. ${lec.course} by ${
-            lec.lecturer
-          } (${start}-${end}) - ${statusText}\n`;
-        });
-
-        message += `\n🔔 Click below to get tomorrow’s schedule automatically!`;
-
-        try {
-          // Send interactive message with button
+        if (hasSession) {
+          // Free message with View button
           await sendWhatsAppText({
             to: student.whatsappNumber,
-            text: message,
+            text: `Hi ${firstName}, your lecture schedule for today is ready! 📚\n\nTap "View Schedule" to see your classes.`,
             buttons: [
               {
-                id: "remind_tomorrow",
-                title: "🔔 Remind me tomorrow",
+                id: "view_schedule",
+                title: "👁️ View Schedule",
               },
             ],
           });
-
-          console.log(`✅ Daily summary sent to ${student.fullName}`);
-        } catch (err) {
-          console.error(
-            `❌ Failed to send summary to ${student.fullName}:`,
-            err.message
-          );
+        } else {
+          // Template with View button (costs money, but opens session)
+          await sendScheduleReadyTemplate({
+            to: student.whatsappNumber,
+            studentName: firstName,
+          });
         }
+
+        console.log(`✅ Schedule ready prompt sent to ${student.fullName}`);
       }
     } catch (err) {
       console.error("❌ Student daily summary job failed:", err.message);
