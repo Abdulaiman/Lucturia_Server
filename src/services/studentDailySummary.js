@@ -58,7 +58,7 @@ const studentDailySummaryJob = cron.schedule(
             // Free message (no cost)
             await sendWhatsAppText({
               to: student.whatsappNumber,
-              text: `📌 Hi ${student.fullName}, the timetable for today's lecture hasn't been released yet—please contact your class reps for updates.`,
+              text: `📌 Hi ${student.fullName}, you have no lectures scheduled for today!`,
               buttons: [
                 {
                   id: "remind_tomorrow",
