@@ -51,29 +51,6 @@ async function hasActiveSession(phoneNumber) {
 /**
  * Smart send: uses free message if session exists, template otherwise
  */
-async function sendSmartMessage({
-  to,
-  freeText,
-  freeButtons = null, // ✅ NEW: optional buttons for free message
-  templateFn,
-  templateParams,
-}) {
-  const hasSession = await hasActiveSession(to);
-
-  if (hasSession) {
-    // Send as free text message with optional buttons
-    console.log(`✅ Active session found for ${to} - sending free message`);
-    return await sendWhatsAppText({
-      to,
-      text: freeText,
-      buttons: freeButtons, // ✅ Pass buttons through
-    });
-  } else {
-    // Send as template
-    console.log(`📋 No session for ${to} - sending template`);
-    return await templateFn(templateParams);
-  }
-}
 
 function formatPhoneNumber(phone) {
   let cleaned = phone
@@ -1158,14 +1135,15 @@ async function notifyStudentsOfContribution(lecture, action, content) {
         );
       } else {
         // ❌ TEMPLATE - Must chunk and send parts
-        tasks.push(
-          sendLecturerUpdateNoteTemplate({
-            to: student.whatsappNumber,
-            course: lecture.course,
-            lecturerName: lecture.lecturer,
-            noteText: content, // already chunked/sanitized by caller
-          })
-        );
+        // no session stop
+        // tasks.push(
+        //   sendLecturerUpdateNoteTemplate({
+        //     to: student.whatsappNumber,
+        //     course: lecture.course,
+        //     lecturerName: lecture.lecturer,
+        //     noteText: content, // already chunked/sanitized by caller
+        //   })
+        // );
       }
     } else if (action === "add_document") {
       // Check session for each student
@@ -1184,16 +1162,17 @@ async function notifyStudentsOfContribution(lecture, action, content) {
         );
       } else {
         // ❌ TEMPLATE - Send via document template
-        tasks.push(
-          sendLecturerUpdateDocumentTemplate({
-            to: student.whatsappNumber,
-            course: lecture.course,
-            lecturerName: lecture.lecturer,
-            sourceMediaId: content.waId,
-            filename: content.fileName,
-            mimeType: content.mimeType,
-          })
-        );
+        // no session stop
+        // tasks.push(
+        //   sendLecturerUpdateDocumentTemplate({
+        //     to: student.whatsappNumber,
+        //     course: lecture.course,
+        //     lecturerName: lecture.lecturer,
+        //     sourceMediaId: content.waId,
+        //     filename: content.fileName,
+        //     mimeType: content.mimeType,
+        //   })
+        // );
       }
     }
   }
@@ -1384,15 +1363,16 @@ See you in class!`;
     });
   } else {
     // Template version (paid)
-    return await sendStudentClassConfirmed({
-      to,
-      studentName,
-      course,
-      lecturerName,
-      startTime,
-      endTime,
-      location,
-    });
+    // no session stop
+    // return await sendStudentClassConfirmed({
+    //   to,
+    //   studentName,
+    //   course,
+    //   lecturerName,
+    //   startTime,
+    //   endTime,
+    //   location,
+    // });
   }
 }
 
@@ -1433,15 +1413,16 @@ We apologize for any inconvenience. Please stay tuned for updates.`;
     });
   } else {
     // Template version (paid)
-    return await sendStudentClassCancelled({
-      to,
-      studentName,
-      course,
-      lecturerName,
-      startTime,
-      endTime,
-      location,
-    });
+    // no session stop
+    // return await sendStudentClassCancelled({
+    //   to,
+    //   studentName,
+    //   course,
+    //   lecturerName,
+    //   startTime,
+    //   endTime,
+    //   location,
+    // });
   }
 }
 
@@ -1483,17 +1464,18 @@ Your class has been rescheduled 📅
     });
   } else {
     // Template version (paid)
-    return await sendStudentClassRescheduled({
-      to,
-      studentName,
-      course,
-      lecturerName,
-      newDate,
-      startTime,
-      endTime,
-      location,
-      note,
-    });
+    // no session stop
+    // return await sendStudentClassRescheduled({
+    //   to,
+    //   studentName,
+    //   course,
+    //   lecturerName,
+    //   newDate,
+    //   startTime,
+    //   endTime,
+    //   location,
+    //   note,
+    // });
   }
 }
 
