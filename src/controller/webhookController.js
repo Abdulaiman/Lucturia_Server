@@ -12,6 +12,7 @@ const {
   handleStudentKeywordSummary,
   handleClassRepBroadcast,
   handleStudentViewSchedule,
+  handleClassRepDocumentBroadcast,
 } = require("./whatsappControllers");
 
 // Helpers (local; keep consistent with your shared utils if needed)
@@ -107,8 +108,6 @@ exports.handleWebhook = async (req, res, next) => {
             (message.type === "interactive" &&
               message.interactive?.type === "button_reply")
           ) {
-            await handleLecturerButton(message);
-            await handleStudentViewSchedule(message);
           }
 
           // 2) Lecturer reschedule flow (NFM reply)
@@ -121,8 +120,22 @@ exports.handleWebhook = async (req, res, next) => {
 
           // 3) Lecturer contribution (documents or any non-text content)
           // Text contributions are handled earlier when a pending action exists.
+          // 3) Document messages — could be from lecturer or class rep
           if (message.type === "document") {
-            await handleLecturerContribution(message);
+            const local = toLocalMsisdn(message.from);
+            const sender = await User.findOne({ whatsappNumber: local }).select(
+              "role"
+            );
+
+            if (sender) {
+              const role = (sender.role || "").toLowerCase();
+
+              if (["class_rep", "rep", "classrep"].includes(role)) {
+                await handleClassRepDocumentBroadcast(message);
+              }
+            } else {
+              await handleLecturerContribution(message);
+            }
           }
         }
       }

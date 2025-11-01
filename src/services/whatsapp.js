@@ -1500,4 +1500,5 @@ module.exports = {
   sendStudentClassConfirmedSmart, // ✅ NEW
   sendStudentClassCancelledSmart, // ✅ NEW
   sendStudentClassRescheduledSmart,
+  sendWhatsAppDocument,
 };

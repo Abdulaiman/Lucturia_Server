@@ -17,6 +17,7 @@ const {
   sendStudentClassCancelledSmart,
   sendStudentClassRescheduledSmart,
   hasActiveSession,
+  sendWhatsAppDocument,
 } = require("../services/whatsapp");
 const { getFirstName, formatTime } = require("../../utils/helpers");
 
@@ -492,7 +493,6 @@ async function resolvePendingForInbound({ message, waLocal }) {
     .populate("lecture");
 }
 
-// ✅ Handle lecturer contributions (idempotent + tolerant of awaiting_choice)
 async function handleLecturerContribution(message) {
   let waId = message.from; // e.g., '2348032532333'
   const waMessageId = message.id; // inbound WAMID
@@ -936,6 +936,83 @@ async function handleStudentKeywordSummary(message) {
 // whatsappHandlers.js (excerpt)
 
 // whatsappHandlers.js
+async function handleClassRepDocumentBroadcast(message) {
+  if (message.type !== "document") return; // only handle documents
+
+  // Extract document info
+  const document = message.document;
+  if (!document?.id) return;
+
+  const local = toLocalMsisdn(message.from);
+  const rep = await User.findOne({ whatsappNumber: local }).populate("class");
+  if (!rep || !rep.class) return;
+
+  const role = (rep.role || "").toLowerCase();
+  if (role !== "class_rep" && role !== "rep" && role !== "classrep") return;
+
+  // Idempotency: ensure we don’t reprocess same inbound message
+  const inboundId = message.id;
+  try {
+    await ProcessedInbound.create({
+      waMessageId: inboundId,
+      from: message.from,
+      type: "class_rep_document_broadcast",
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      console.log(
+        `🔁 Duplicate class-rep document inbound ${inboundId}, skipping.`
+      );
+      return;
+    }
+    throw err;
+  }
+
+  const classmates = await User.find({
+    class: rep.class._id,
+    role: { $in: ["student", "admin", "Student", "STUDENT", "classrep"] },
+  }).select("whatsappNumber fullName");
+
+  if (!classmates.length) {
+    await sendWhatsAppText({
+      to: rep.whatsappNumber,
+      text: "ℹ️ No students found in your class to send this document to.",
+    });
+    return;
+  }
+
+  const repName = getFirstName(rep.fullName || "Class Rep");
+  const caption =
+    message.document?.caption?.trim() ||
+    `📄 From your Class Rep, ${repName}: ${document.filename || ""}`;
+
+  console.log(
+    `📤 Broadcasting document '${document.filename}' from ${repName} to ${classmates.length} classmates`
+  );
+
+  // Fan-out broadcast
+  for (const student of classmates) {
+    if (
+      !student.whatsappNumber ||
+      student.whatsappNumber === rep.whatsappNumber
+    )
+      continue;
+
+    await sendWhatsAppDocument({
+      to: student.whatsappNumber,
+      documentId: document.id,
+      filename: document.filename,
+      mimeType: document.mime_type,
+      caption,
+    });
+  }
+
+  // Acknowledge rep
+  await sendWhatsAppText({
+    to: rep.whatsappNumber,
+    text: "✅ Your document has been sent to the class.",
+  });
+}
 
 async function handleClassRepBroadcast(message) {
   if (message.type !== "text") return;
@@ -979,7 +1056,7 @@ async function handleClassRepBroadcast(message) {
 
   const classmates = await User.find({
     class: rep.class._id,
-    role: { $in: ["student", "admin", "Student", "STUDENT"] }, // students only
+    role: { $in: ["student", "admin", "Student", "STUDENT", "classrep"] }, // students only
   }).select("whatsappNumber fullName");
 
   if (!classmates.length) {
@@ -1121,4 +1198,5 @@ module.exports = {
   handleStudentKeywordSummary,
   handleClassRepBroadcast,
   handleStudentViewSchedule,
+  handleClassRepDocumentBroadcast,
 };
