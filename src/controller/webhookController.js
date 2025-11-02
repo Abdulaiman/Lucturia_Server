@@ -108,6 +108,8 @@ exports.handleWebhook = async (req, res, next) => {
             (message.type === "interactive" &&
               message.interactive?.type === "button_reply")
           ) {
+            await handleLecturerButton(message);
+            await handleStudentViewSchedule(message);
           }
 
           // 2) Lecturer reschedule flow (NFM reply)
