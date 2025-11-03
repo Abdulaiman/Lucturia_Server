@@ -8,6 +8,7 @@ const app = require("./app");
 // Import the lecture notification job
 const lectureNotifierJob = require("./src/services/lectureNotifier"); // adjust path if needed
 const studentDailySummaryJob = require("./src/services/studentDailySummary");
+const studentEveningReminderJob = require("./src/services/studentEveningReminder");
 
 // Connect to MongoDB
 const DB = process?.env?.DATABASE?.replace(
@@ -36,4 +37,6 @@ app.listen(port, () => {
   console.log("🕗 Lecture notification scheduler started");
   studentDailySummaryJob.start();
   console.log("🕗 student daily scheduler started");
+  studentEveningReminderJob.start();
+  console.log("🕗 student evening scheduler started");
 });
