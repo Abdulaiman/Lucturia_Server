@@ -17,7 +17,7 @@ const classSchema = new mongoose.Schema(
     // 🔹 New: Controls whether lecturers are notified for this class
     notifyLecturers: {
       type: Boolean,
-      default: true, // keep current behavior for existing classes
+      default: false, // keep current behavior for existing classes
     },
   },
   { timestamps: true }
