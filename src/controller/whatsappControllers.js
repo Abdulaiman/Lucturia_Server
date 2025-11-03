@@ -1136,6 +1136,9 @@ async function handleStudentViewSchedule(message) {
     return;
   }
 
+  // Check if this class sends lecturer notifications
+  const classSendsLecturerNotifications = !!student.class.notifyLecturers;
+
   // Fetch today's lectures
   const todayStart = dayjs().tz("Africa/Lagos").startOf("day").toDate();
   const todayEnd = dayjs().tz("Africa/Lagos").endOf("day").toDate();
@@ -1153,7 +1156,7 @@ async function handleStudentViewSchedule(message) {
     return;
   }
 
-  // Build full schedule message
+  // Build schedule message
   let scheduleText = `📚 Hello ${
     student.fullName
   }, here's your schedule for ${formatLagosDate(new Date())}:\n\n`;
@@ -1161,22 +1164,30 @@ async function handleStudentViewSchedule(message) {
   lectures.forEach((lec, i) => {
     const start = formatLagosTime(lec.startTime);
     const end = formatLagosTime(lec.endTime);
-    const status = (lec.status || "").toLowerCase();
 
-    let statusText = "⏳ Pending lecturer's response";
-    if (status === "confirmed") statusText = "✅ Confirmed";
-    else if (status === "cancelled") statusText = "❌ Cancelled";
-    else if (status === "rescheduled") {
-      const newDate = formatLagosDate(lec.startTime);
-      statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
+    if (classSendsLecturerNotifications) {
+      // Include status if this class notifies lecturers
+      const status = (lec.status || "").toLowerCase();
+      let statusText = "⏳ Pending lecturer's response";
+      if (status === "confirmed") statusText = "✅ Confirmed";
+      else if (status === "cancelled") statusText = "❌ Cancelled";
+      else if (status === "rescheduled") {
+        const newDate = formatLagosDate(lec.startTime);
+        statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
+      }
+
+      scheduleText += `${i + 1}. ${lec.course} by ${
+        lec.lecturer
+      } (${start}-${end}) - ${statusText}\n`;
+    } else {
+      // No status for this class
+      scheduleText += `${i + 1}. ${lec.course} by ${
+        lec.lecturer
+      } (${start}-${end})\n`;
     }
-
-    scheduleText += `${i + 1}. ${lec.course} by ${
-      lec.lecturer
-    } (${start}-${end}) - ${statusText}\n`;
   });
 
-  // Send as FREE message (session already open from button click)
+  // Send the schedule
   await sendWhatsAppText({
     to: student.whatsappNumber,
     text: scheduleText,

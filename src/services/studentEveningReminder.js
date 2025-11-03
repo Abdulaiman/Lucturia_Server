@@ -1,3 +1,4 @@
+// controllers/studentEveningReminderJob.js
 const cron = require("node-cron");
 const dayjs = require("dayjs");
 const utc = require("dayjs/plugin/utc");
@@ -23,15 +24,11 @@ function getFirstName(fullName) {
   return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 }
 
-// =========================
-// 6PM DAILY REMINDER JOB
-// =========================
 const studentEveningReminderJob = cron.schedule(
-  "00 18 * * *", // 6:00 PM Africa/Lagos
+  "00 18 * * *", // ⏰ 6:00 PM
   async () => {
     console.log("📤 Running student evening reminder job...");
 
-    // Tomorrow's time range
     const tomorrowStart = dayjs()
       .tz("Africa/Lagos")
       .add(1, "day")
@@ -54,10 +51,8 @@ const studentEveningReminderJob = cron.schedule(
           startTime: { $gte: tomorrowStart, $lte: tomorrowEnd },
         });
 
-        // If no lectures tomorrow, skip silently
         if (!lectures.length) continue;
-        let statusText = "⏳ Pending lecturer's response";
-        // Build message text
+
         const firstName = getFirstName(student.fullName);
         let message = `📅 Hi ${firstName}, here’s your lecture schedule for tomorrow (${formatLagosDate(
           tomorrowStart
@@ -68,13 +63,17 @@ const studentEveningReminderJob = cron.schedule(
           const end = formatLagosTime(lec.endTime);
           message += `${i + 1}. ${lec.course} by ${
             lec.lecturer
-          } (${start}-${end}) - ${statusText}\n`;
+          } (${start}-${end})\n`;
         });
 
-        message +=
-          "\n🕓 A reminder has been sent to your lecturers — we'll update you as they confirm their schedules.";
+        // 🔹 Tailor the footer based on class preference
+        if (student.class.notifyLecturers) {
+          message +=
+            "\n🕓 A reminder has been sent to your lecturers — we'll update you as they confirm their schedules.";
+        } else {
+          message += "\n✅ This is your timetable for tomorrow.";
+        }
 
-        // Send as plain WhatsApp text (no template)
         await sendWhatsAppText({
           to: student.whatsappNumber,
           text: message,

@@ -1,5 +1,7 @@
+// controllers/lectureNotifierJob.js
 const cron = require("node-cron");
 const Lecture = require("../model/lectureModel");
+const Class = require("../model/classModel");
 const { sendLecturerClassNotification } = require("./whatsapp");
 const dayjs = require("dayjs");
 const utc = require("dayjs/plugin/utc");
@@ -8,14 +10,12 @@ const timezone = require("dayjs/plugin/timezone");
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-// Schedule daily at 7:30 PM Lagos time
 const lectureNotifierJob = cron.schedule(
-  "00 18 * * *", // 19:30 = 7:30 PM
+  "00 19 * * *", // ⏰ 7:30 PM Africa/Lagos
   async () => {
     console.log("📤 Running lecture notification job...");
 
     try {
-      // 🔹 Compute tomorrow in Africa/Lagos
       const tomorrowStart = dayjs()
         .tz("Africa/Lagos")
         .add(1, "day")
@@ -27,18 +27,26 @@ const lectureNotifierJob = cron.schedule(
         .endOf("day")
         .toDate();
 
-      // Fetch all lectures for tomorrow (stored in UTC, but boundaries calculated in Lagos)
       const lectures = await Lecture.find({
         startTime: { $gte: tomorrowStart, $lte: tomorrowEnd },
-      });
+      }).populate("class");
 
       if (!lectures.length) {
         console.log("ℹ️ No lectures scheduled for tomorrow.");
         return;
       }
 
-      // Send notifications
       for (const lecture of lectures) {
+        if (!lecture.class) continue;
+
+        // 🔹 Skip if the class opted out of notifying lecturers
+        if (!lecture.class.notifyLecturers) {
+          console.log(
+            `🚫 Skipping lecturer notification for ${lecture.course} (${lecture.class.title})`
+          );
+          continue;
+        }
+
         if (!lecture.lecturerWhatsapp) continue;
 
         try {
@@ -46,8 +54,7 @@ const lectureNotifierJob = cron.schedule(
             to: lecture.lecturerWhatsapp,
             lecturerName: lecture.lecturer,
             course: lecture.course,
-            classId: lecture.class.toString(),
-            // Format times in Africa/Lagos
+            classId: lecture.class._id.toString(),
             startTime: dayjs(lecture.startTime)
               .tz("Africa/Lagos")
               .format("HH:mm"),
@@ -70,7 +77,7 @@ const lectureNotifierJob = cron.schedule(
   },
   {
     scheduled: true,
-    timezone: "Africa/Lagos", // cron itself runs in Lagos timezone
+    timezone: "Africa/Lagos",
   }
 );
 
