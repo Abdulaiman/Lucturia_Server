@@ -11,7 +11,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const lectureNotifierJob = cron.schedule(
-  "00 19 * * *", // ⏰ 7:30 PM Africa/Lagos
+  "00 18 * * *", // ⏰ 7:30 PM Africa/Lagos
   async () => {
     console.log("📤 Running lecture notification job...");
 
