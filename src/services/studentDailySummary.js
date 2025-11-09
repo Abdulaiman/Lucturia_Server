@@ -1,3 +1,4 @@
+// controllers/studentDailySummaryJob.js
 const cron = require("node-cron");
 const dayjs = require("dayjs");
 const utc = require("dayjs/plugin/utc");
@@ -7,33 +8,17 @@ const User = require("../model/userModel");
 const {
   sendWhatsAppText,
   sendNoLectureNotificationTemplate,
-  sendScheduleReadyTemplate, // ✅ NEW
-  hasActiveSession, // ✅ NEW
+  hasActiveSession,
 } = require("./whatsapp");
-const PendingAction = require("../model/pendingActionModel");
+const { buildScheduleText } = require("../controller/whatsappControllers");
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-function formatLagosTime(date) {
-  return dayjs(date).tz("Africa/Lagos").format("HH:mm");
-}
-
-function formatLagosDate(date) {
-  return dayjs(date).tz("Africa/Lagos").format("dddd, MMM D YYYY");
-}
-
-function getFirstName(fullName) {
-  if (!fullName) return "";
-  const first = fullName.trim().split(" ")[0];
-  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
-}
-
-// 6AM daily (local Africa/Lagos time)
 const studentDailySummaryJob = cron.schedule(
-  "00 06 * * *",
+  "00 06 * * *", // 6 AM
   async () => {
-    console.log("📤 Running student daily summary job...");
+    console.log("📤 Running student daily (today) summary job...");
 
     const todayStart = dayjs().tz("Africa/Lagos").startOf("day").toDate();
     const todayEnd = dayjs().tz("Africa/Lagos").endOf("day").toDate();
@@ -49,59 +34,46 @@ const studentDailySummaryJob = cron.schedule(
           startTime: { $gte: todayStart, $lte: todayEnd },
         });
 
-        // ✅ Check if user has active session
-        const hasSession = await hasActiveSession(student.whatsappNumber);
-
-        // ========== NO LECTURES SCENARIO ==========
         if (!lectures.length) {
+          const hasSession = await hasActiveSession(student.whatsappNumber);
+
           if (hasSession) {
-            // Free message (no cost)
             await sendWhatsAppText({
               to: student.whatsappNumber,
               text: `📌 Hi ${student.fullName}, you have no lectures scheduled for today!`,
               buttons: [
-                {
-                  id: "remind_tomorrow",
-                  title: "🔔 Remind me tomorrow",
-                },
+                { id: "remind_tomorrow", title: "🔔 Remind me tomorrow" },
               ],
             });
           } else {
-            // Template (costs money)
             await sendNoLectureNotificationTemplate({
               to: student.whatsappNumber,
               fullname: student.fullName,
             });
           }
-          console.log(`✅ No lecture message sent to ${student.fullName}`);
+          console.log(`✅ No-lecture msg sent → ${student.fullName}`);
           continue;
         }
 
-        // ========== HAS LECTURES SCENARIO ==========
-        // Send SHORT "schedule ready" prompt only
-        const firstName = getFirstName(student.fullName);
+        // ✅ AUTO-SEND full schedule text (no button)
+        const scheduleText = await buildScheduleText(
+          student,
+          lectures,
+          todayStart
+        );
 
-        if (hasSession) {
-          // Free message with View button
-          await sendWhatsAppText({
-            to: student.whatsappNumber,
-            text: `Hi ${firstName}, your lecture schedule for today is ready! 📚\n\nTap "View Schedule" to see your classes.`,
-            buttons: [
-              {
-                id: "view_schedule",
-                title: "👁️ View Schedule",
-              },
-            ],
-          });
-        } else {
-          // Template with View button (costs money, but opens session)
-          await sendScheduleReadyTemplate({
-            to: student.whatsappNumber,
-            studentName: firstName,
-          });
-        }
+        await sendWhatsAppText({
+          to: student.whatsappNumber,
+          text: scheduleText,
+          buttons: [
+            {
+              id: "Got_it",
+              title: "Got it",
+            },
+          ],
+        });
 
-        console.log(`✅ Schedule ready prompt sent to ${student.fullName}`);
+        console.log(`✅ Full schedule sent (6AM) → ${student.fullName}`);
       }
     } catch (err) {
       console.error("❌ Student daily summary job failed:", err.message);

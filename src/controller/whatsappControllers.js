@@ -42,99 +42,82 @@ function toLocalMsisdn(waId) {
     ? "0" + waId.slice(3)
     : waId;
 }
+module.exports = function buildScheduleText(student, lectures, targetDate) {
+  const firstName = getFirstName(student.fullName);
+
+  let scheduleText = `📚 Hello ${firstName}, here’s your schedule for ${formatLagosDate(
+    targetDate
+  )}:\n\n`;
+
+  const classNotifies = !!student.class.notifyLecturers;
+
+  lectures.forEach((lec, i) => {
+    const start = formatLagosTime(lec.startTime);
+    const end = formatLagosTime(lec.endTime);
+
+    if (classNotifies) {
+      const status = (lec.status || "").toLowerCase();
+      let text = "⏳ Pending lecturer response";
+
+      if (status === "confirmed") text = "✅ Confirmed";
+      else if (status === "cancelled") text = "❌ Cancelled";
+      else if (status === "rescheduled") {
+        text = `🔄 Rescheduled to ${formatLagosDate(
+          lec.startTime
+        )} (${start}-${end})`;
+      }
+
+      scheduleText += `${i + 1}. ${lec.course} by ${
+        lec.lecturer
+      } (${start}-${end}) — ${text}\n`;
+    } else {
+      scheduleText += `${i + 1}. ${lec.course} by ${
+        lec.lecturer
+      } (${start}-${end})\n`;
+    }
+  });
+
+  return scheduleText;
+};
+async function buildScheduleText(student, lectures, targetDate) {
+  const firstName = getFirstName(student.fullName);
+  let scheduleText = `📚 Hello ${firstName}, here’s your schedule for ${formatLagosDate(
+    targetDate
+  )}:\n\n`;
+
+  const classSendsLecturerNotifications = !!student.class.notifyLecturers;
+
+  lectures.forEach((lec, i) => {
+    const start = formatLagosTime(lec.startTime);
+    const end = formatLagosTime(lec.endTime);
+
+    if (classSendsLecturerNotifications) {
+      const status = (lec.status || "").toLowerCase();
+      let statusText = "⏳ Pending lecturer's response";
+      if (status === "confirmed") statusText = "✅ Confirmed";
+      else if (status === "cancelled") statusText = "❌ Cancelled";
+      else if (status === "rescheduled") {
+        const newDate = formatLagosDate(lec.startTime);
+        statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
+      }
+
+      scheduleText += `${i + 1}. ${lec.course} by ${
+        lec.lecturer
+      } (${start}-${end}) - ${statusText}\n`;
+    } else {
+      scheduleText += `${i + 1}. ${lec.course} by ${
+        lec.lecturer
+      } (${start}-${end})\n`;
+    }
+  });
+
+  return scheduleText;
+}
 
 // ---- helpers (place near top of the file) ----
 const MAX_TEMPLATE_BODY = 1024; // official WhatsApp template body limit [Meta]
 const RESERVED_HEADROOM = 100; // safety buffer under limit
 const EFFECTIVE_LIMIT = MAX_TEMPLATE_BODY - RESERVED_HEADROOM; // 924
-
-// Split by sentences while preserving newline tokens
-function splitBySentence(text) {
-  const parts = [];
-  const tokens = String(text).split(/(\n{2,}|\n)/); // keep newlines as tokens
-  for (const tk of tokens) {
-    if (tk === "\n" || /^\n{2,}$/.test(tk)) {
-      parts.push(tk);
-      continue;
-    }
-    // heuristic sentence split: end punctuation + space + capital/digit start
-    const sentences = tk.split(/(?<=[.!?])\s+(?=[A-Z0-9])/);
-    for (const s of sentences) parts.push(s);
-  }
-  return parts;
-}
-
-// Pack text into chunks <= limit, preferring paragraph/sentence/word boundaries
-function packChunksPreservingLayout(text, limit = EFFECTIVE_LIMIT) {
-  const normalized = String(text).normalize("NFC");
-  const paras = normalized.split(/\n{2,}/);
-  const chunks = [];
-  let current = "";
-
-  const canAppend = (piece) => current.length + piece.length <= limit;
-  const flush = () => {
-    if (current.trim().length) chunks.push(current.trimEnd());
-    current = "";
-  };
-
-  for (let i = 0; i < paras.length; i++) {
-    const para = paras[i];
-    let paraText = i < paras.length - 1 ? para + "\n\n" : para;
-
-    if (paraText.length <= limit) {
-      if (canAppend(paraText)) current += paraText;
-      else {
-        flush();
-        current = paraText;
-      }
-      continue;
-    }
-
-    // Paragraph too long: split by sentences, then by words, then hard-split as last resort
-    const parts = splitBySentence(paraText);
-    for (const part of parts) {
-      if (part.length <= limit) {
-        if (canAppend(part)) current += part;
-        else {
-          flush();
-          current = part;
-        }
-      } else {
-        const words = part.split(/(\s+)/); // keep spaces
-        for (const w of words) {
-          if (w.length <= limit) {
-            if (canAppend(w)) current += w;
-            else {
-              flush();
-              current = w;
-            }
-          } else {
-            // Hard split giant token
-            let start = 0;
-            while (start < w.length) {
-              const slice = w.slice(start, start + limit);
-              if (canAppend(slice)) current += slice;
-              else {
-                flush();
-                current = slice;
-              }
-              start += limit;
-            }
-          }
-        }
-      }
-    }
-  }
-  flush();
-  return chunks;
-}
-
-// Optional header to help students follow multi-part notes
-function annotateParts(chunks) {
-  if (chunks.length <= 1) return chunks;
-  const n = chunks.length;
-  return chunks.map((c, i) => `Part ${i + 1}/${n}\n\n` + c);
-}
 
 // Replace newlines/tabs; collapse long whitespace; strip control chars
 function sanitizeForWhatsAppTemplate(text) {
@@ -1086,7 +1069,6 @@ async function handleClassRepBroadcast(message) {
 }
 
 async function handleStudentViewSchedule(message) {
-  // Extract button reply
   let reply = "";
   if (message.type === "button" && message.button) {
     reply = message.button.text || message.button.payload;
@@ -1100,30 +1082,12 @@ async function handleStudentViewSchedule(message) {
   }
 
   const lower = (reply || "").toLowerCase();
-
-  // Only handle "view schedule" clicks
   if (!lower.includes("view schedule") && !lower.includes("view_schedule")) {
-    return; // Not our button, skip silently
+    return; // not ours
   }
 
-  // Idempotency check
-  const inboundId = message.id;
-  try {
-    await ProcessedInbound.create({
-      waMessageId: inboundId,
-      from: message.from,
-      type: "button_view_schedule",
-    });
-  } catch (e) {
-    if (e && e.code === 11000) {
-      console.log(`🔁 Duplicate view schedule ${inboundId}, skipping.`);
-      return;
-    }
-    throw e;
-  }
-
-  // Get student info
   const local = toLocalMsisdn(message.from);
+
   const student = await User.findOne({ whatsappNumber: local }).populate(
     "class"
   );
@@ -1131,63 +1095,58 @@ async function handleStudentViewSchedule(message) {
   if (!student || !student.class) {
     await sendWhatsAppText({
       to: local,
-      text: "⚠️ Could not find your class information. Please contact support.",
+      text: "⚠️ Could not find your class information.",
     });
     return;
   }
 
-  // Check if this class sends lecturer notifications
-  const classSendsLecturerNotifications = !!student.class.notifyLecturers;
+  const now = dayjs().tz("Africa/Lagos");
 
-  // Fetch today's lectures
-  const todayStart = dayjs().tz("Africa/Lagos").startOf("day").toDate();
-  const todayEnd = dayjs().tz("Africa/Lagos").endOf("day").toDate();
+  const todayStart = now.startOf("day").toDate();
+  const todayEnd = now.endOf("day").toDate();
 
-  const lectures = await Lecture.find({
+  const tomorrowStart = now.add(1, "day").startOf("day").toDate();
+  const tomorrowEnd = now.add(1, "day").endOf("day").toDate();
+
+  let primaryRange, fallbackRange;
+
+  // ✅ If time ≥ 6pm → show tomorrow first
+  if (now.hour() >= 18) {
+    primaryRange = { start: tomorrowStart, end: tomorrowEnd };
+    fallbackRange = { start: todayStart, end: todayEnd };
+  } else {
+    primaryRange = { start: todayStart, end: todayEnd };
+    fallbackRange = { start: tomorrowStart, end: tomorrowEnd };
+  }
+
+  // ✅ Search for primary
+  let lectures = await Lecture.find({
     class: student.class._id,
-    startTime: { $gte: todayStart, $lte: todayEnd },
+    startTime: { $gte: primaryRange.start, $lte: primaryRange.end },
   });
+
+  let target = primaryRange.start;
+
+  // ✅ If none → search fallback
+  if (!lectures.length) {
+    lectures = await Lecture.find({
+      class: student.class._id,
+      startTime: { $gte: fallbackRange.start, $lte: fallbackRange.end },
+    });
+
+    target = fallbackRange.start;
+  }
 
   if (!lectures.length) {
     await sendWhatsAppText({
       to: student.whatsappNumber,
-      text: `📌 Hi ${student.fullName}, You have no lectures today!`,
+      text: `📌 Hi ${student.fullName}, no lectures!`,
     });
     return;
   }
 
-  // Build schedule message
-  let scheduleText = `📚 Hello ${
-    student.fullName
-  }, here's your schedule for ${formatLagosDate(new Date())}:\n\n`;
+  const scheduleText = await buildScheduleText(student, lectures, target);
 
-  lectures.forEach((lec, i) => {
-    const start = formatLagosTime(lec.startTime);
-    const end = formatLagosTime(lec.endTime);
-
-    if (classSendsLecturerNotifications) {
-      // Include status if this class notifies lecturers
-      const status = (lec.status || "").toLowerCase();
-      let statusText = "⏳ Pending lecturer's response";
-      if (status === "confirmed") statusText = "✅ Confirmed";
-      else if (status === "cancelled") statusText = "❌ Cancelled";
-      else if (status === "rescheduled") {
-        const newDate = formatLagosDate(lec.startTime);
-        statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
-      }
-
-      scheduleText += `${i + 1}. ${lec.course} by ${
-        lec.lecturer
-      } (${start}-${end}) - ${statusText}\n`;
-    } else {
-      // No status for this class
-      scheduleText += `${i + 1}. ${lec.course} by ${
-        lec.lecturer
-      } (${start}-${end})\n`;
-    }
-  });
-
-  // Send the schedule
   await sendWhatsAppText({
     to: student.whatsappNumber,
     text: scheduleText,
@@ -1199,7 +1158,7 @@ async function handleStudentViewSchedule(message) {
     ],
   });
 
-  console.log(`✅ Full schedule sent to ${student.fullName}`);
+  console.log("✅ Full schedule sent →", student.fullName);
 }
 
 module.exports = {
@@ -1210,4 +1169,5 @@ module.exports = {
   handleClassRepBroadcast,
   handleStudentViewSchedule,
   handleClassRepDocumentBroadcast,
+  buildScheduleText,
 };
