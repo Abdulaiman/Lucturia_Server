@@ -13,6 +13,8 @@ const {
   handleClassRepBroadcast,
   handleStudentViewSchedule,
   handleClassRepDocumentBroadcast,
+  handleJoinClass,
+  handleOnboardingFlow,
 } = require("./whatsappControllers");
 
 // Helpers (local; keep consistent with your shared utils if needed)
@@ -82,13 +84,27 @@ exports.handleWebhook = async (req, res, next) => {
           // 0) Exact keyword: "summary" (case-insensitive)
           if (message.type === "text") {
             const bodyText = (message.text?.body || "").trim();
+
+            if (bodyText.startsWith("join_")) {
+              await handleJoinClass(message);
+              continue;
+            }
+            const local = toLocalMsisdn(message.from);
+            const user = await User.findOne({ whatsappNumber: local });
+            if (
+              user &&
+              user.onboardingStep &&
+              user.onboardingStep !== "COMPLETE"
+            ) {
+              await handleOnboardingFlow(message);
+              continue;
+            }
             if (bodyText && bodyText.toLowerCase() === "summary") {
               await handleStudentKeywordSummary(message); // idempotent by inbound WAMID
               continue; // stop other handlers, including class-rep broadcast
             }
 
             // 0a) If lecturer has a pending contribution, handle it and stop
-            const local = toLocalMsisdn(message.from);
             const pending = await PendingAction.findOne({
               lecturerWhatsapp: local,
               status: "pending",

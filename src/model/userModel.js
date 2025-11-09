@@ -3,11 +3,10 @@ const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema(
   {
-    fullName: { type: String, required: true, trim: true },
-    regNumber: { type: String, required: true, unique: true },
+    fullName: { type: String, trim: true },
+    regNumber: { type: String, unique: true },
     whatsappNumber: {
       type: String,
-      required: true,
       unique: true,
       match: [/^\d{10,15}$/, "Please provide a valid phone number"],
     },
@@ -19,6 +18,11 @@ const userSchema = new mongoose.Schema(
     class: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Class",
+    },
+    onboardingStep: {
+      type: String,
+      enum: ["NONE", "FULL_NAME", "REG_NUMBER", "COMPLETE"],
+      default: "NONE",
     },
     lastMessageTime: { type: Number, default: null }, // ✅ NEW FIELD
   },

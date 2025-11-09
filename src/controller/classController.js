@@ -97,6 +97,7 @@ exports.joinClass = catchAsync(async (req, res, next) => {
   }
 
   user.class = classId;
+  user.onboardingStep = "COMPLETE";
   await user.save();
   console.log(user);
   console.log(myClass);

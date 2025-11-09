@@ -4,6 +4,7 @@ const LectureMessage = require("../model/lectureMessageModel");
 const Lecture = require("../model/lectureModel");
 const PendingAction = require("../model/pendingActionModel");
 const User = require("../model/userModel");
+const Class = require("../model/classModel");
 const ProcessedInbound = require("../model/processedInboundModel");
 const {
   sendStudentClassConfirmed,
@@ -1161,6 +1162,136 @@ async function handleStudentViewSchedule(message) {
   console.log("✅ Full schedule sent →", student.fullName);
 }
 
+async function handleJoinClass(message) {
+  const text = (message.text?.body || "").trim();
+  if (!text.startsWith("join_")) return;
+
+  const classId = text.replace("join_", "");
+  const local = toLocalMsisdn(message.from);
+
+  let user = await User.findOne({ whatsappNumber: local });
+
+  // Fetch class info
+  const classInfo = await Class.findById(classId);
+  if (!classInfo) {
+    await sendWhatsAppText({
+      to: local,
+      text: "❌ Invalid class link. Please check and try again.",
+    });
+    return;
+  }
+
+  // Already completed onboarding
+  if (user?.class && user?.class.toString() === classId) {
+    await sendWhatsAppText({
+      to: local,
+      text: "✅ You are already enrolled in this class.",
+    });
+    return;
+  } else if (user?.class && user?.class.toString() !== classId) {
+    user.class = classId;
+    await user.save();
+
+    await sendWhatsAppText({
+      to: local,
+      text: `ℹ️ You were switched to *${classInfo.title}* successfully.`,
+    });
+    return;
+  }
+
+  if (!user) {
+    // New user → create and start onboarding
+    user = await User.create({
+      whatsappNumber: local,
+      class: classId,
+      onboardingStep: "FULL_NAME",
+    });
+
+    await sendWhatsAppText({
+      to: local,
+      text: `👋 Welcome! You’re about to join *${classInfo.title}*.\nPlease send your full name.`,
+    });
+    return;
+  }
+
+  // Existing user but onboarding not complete → restart or switch class
+  if (user.onboardingStep !== "COMPLETE") {
+    user.class = classId;
+    user.onboardingStep = "FULL_NAME";
+    await user.save();
+
+    await sendWhatsAppText({
+      to: local,
+      text: `👋 Welcome back! You’re joining *${classInfo.title}*.\nPlease send your full name.`,
+    });
+    return;
+  }
+}
+async function handleOnboardingFlow(message) {
+  if (message.type !== "text") return;
+
+  const local = toLocalMsisdn(message.from);
+  const user = await User.findOne({ whatsappNumber: local }).populate("class");
+  if (!user || user.onboardingStep === "COMPLETE") return;
+
+  const text = (message.text?.body || "").trim();
+
+  switch (user.onboardingStep) {
+    case "FULL_NAME":
+      if (!text || text.length < 3) {
+        await sendWhatsAppText({
+          to: local,
+          text: "⚠️ Please enter a valid full name (at least 3 characters).",
+        });
+        return;
+      }
+
+      user.fullName = text;
+      user.onboardingStep = "REG_NUMBER";
+      await user.save();
+
+      await sendWhatsAppText({
+        to: local,
+        text: "Great! ✅ Now, please send your registration number.",
+      });
+      break;
+
+    case "REG_NUMBER":
+      if (!text || text.length < 3) {
+        await sendWhatsAppText({
+          to: local,
+          text: "⚠️ Please enter a valid registration number.",
+        });
+        return;
+      }
+
+      user.regNumber = text;
+      user.onboardingStep = "COMPLETE";
+      await user.save();
+
+      await sendWhatsAppText({
+        to: local,
+        text: `🎉 Congratulations ${getFirstName(
+          user.fullName
+        )}! You’ve successfully joined *${user.class.title}* 🎓  
+
+We’re excited to have you on board! From now on, you’ll get your timetable, class updates, and important documents straight to WhatsApp. ✅  
+
+Welcome to the class! 🚀`,
+        buttons: [
+          {
+            id: "Got_it",
+            title: "Got it",
+          },
+        ],
+      });
+
+      break;
+
+    default:
+      return;
+  }
+}
 module.exports = {
   handleLecturerButton,
   handleLecturerReschedule,
@@ -1170,4 +1301,6 @@ module.exports = {
   handleStudentViewSchedule,
   handleClassRepDocumentBroadcast,
   buildScheduleText,
+  handleJoinClass,
+  handleOnboardingFlow,
 };
