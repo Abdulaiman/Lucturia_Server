@@ -691,6 +691,13 @@ async function handleLecturerContribution(message) {
 
 // ✅ Handle reschedule submissions (idempotent + no-op guard)
 async function handleLecturerReschedule(message) {
+  // --- Helper to create a local Date without timezone shifting ---
+  function makeLocalDate(dateStr, timeStr) {
+    const [year, month, day] = dateStr.split("-").map(Number);
+    const [hour, minute] = timeStr.split(":").map(Number);
+    return new Date(year, month - 1, day, hour, minute);
+  }
+
   // 1) Dedupe by inbound WAMID for this interactive submission
   const inboundId = message.id; // unique WAMID for the submission
   try {
@@ -720,17 +727,12 @@ async function handleLecturerReschedule(message) {
   );
   if (!lecture) return;
 
-  // 4) Compute new times
-  const newStart = new Date(
-    `${resData.screen_0_New_Date_0}T${
-      resData.screen_0_Class_Starts_1.split("_")[1]
-    }`
-  );
-  const newEnd = new Date(
-    `${resData.screen_0_New_Date_0}T${
-      resData.screen_0_Class_Ends_2.split("_")[1]
-    }`
-  );
+  // 4) Compute new times (timezone-safe)
+  const classStartTime = resData.screen_0_Class_Starts_1.split("_")[1]; // "10:00"
+  const classEndTime = resData.screen_0_Class_Ends_2.split("_")[1]; // "13:00"
+
+  const newStart = makeLocalDate(resData.screen_0_New_Date_0, classStartTime);
+  const newEnd = makeLocalDate(resData.screen_0_New_Date_0, classEndTime);
 
   // 5) No-op guard (avoid duplicate notifications if nothing changed)
   const unchanged =
@@ -768,8 +770,8 @@ async function handleLecturerReschedule(message) {
       course: lecture.course,
       lecturerName: lecture.lecturer,
       newDate: resData.screen_0_New_Date_0,
-      startTime: resData.screen_0_Class_Starts_1.split("_")[1],
-      endTime: resData.screen_0_Class_Ends_2.split("_")[1],
+      startTime: classStartTime,
+      endTime: classEndTime,
       location: lecture.location,
       note: resData.screen_0_Add_note_3 || null,
     });
