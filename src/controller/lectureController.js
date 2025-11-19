@@ -10,6 +10,8 @@ const {
   sendStudentClassRescheduled,
   sendStudentClassConfirmed,
   sendWhatsAppMessage,
+  sendStudentClassConfirmedSmart,
+  sendStudentClassCancelledSmart,
 } = require("../services/whatsapp");
 const { getFirstName } = require("../../utils/helpers");
 
@@ -270,7 +272,7 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
   for (const student of students) {
     try {
       if (effectiveStatus === "Cancelled") {
-        await sendStudentClassCancelled({
+        await sendStudentClassCancelledSmart({
           to: student.whatsappNumber,
           studentName: getFirstName(student.fullName),
           course: lecture.course,
@@ -280,7 +282,7 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
           location: lecture.location,
         });
       } else if (effectiveStatus === "Rescheduled") {
-        await sendStudentClassRescheduled({
+        await sendStudentClassRescheduledSmart({
           to: student.whatsappNumber,
           studentName: getFirstName(student.fullName),
           course: lecture.course,
@@ -292,7 +294,8 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
           note: "Rescheduled by your class rep.",
         });
       } else if (oldStatus !== "Confirmed" && newStatus === "Confirmed") {
-        await sendStudentClassConfirmed({
+        await sendStudentClassConfirmedSmart;
+        sendStudentClassConfirmedSmart({
           to: student.whatsappNumber,
           studentName: getFirstName(student.fullName),
           status: "Confirmed",
@@ -303,7 +306,7 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
           location: lecture.location,
         });
       } else if (oldLocation !== newLocation) {
-        await sendStudentClassConfirmed({
+        await sendStudentClassConfirmedSmart({
           to: student.whatsappNumber,
           studentName: getFirstName(student.fullName),
           status: lecture.status,
