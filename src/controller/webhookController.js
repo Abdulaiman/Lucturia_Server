@@ -24,20 +24,6 @@ function toLocalMsisdn(waId) {
     : waId;
 }
 
-function getFirstName(fullName = "") {
-  if (!fullName) return "";
-  const first = fullName.trim().split(" ")[0];
-  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
-}
-function formatTime(date) {
-  if (!date) return "";
-  return new Date(date).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true, // toggle if you prefer 24h
-  });
-}
-
 // Add near other helper functions (toLocalMsisdn, getFirstName, etc.)
 async function updateUserSession(phoneNumber) {
   const local = toLocalMsisdn(phoneNumber);

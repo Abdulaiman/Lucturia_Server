@@ -260,13 +260,17 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
     "whatsappNumber fullName"
   );
 
-  const startTimeStr = newStart.toLocaleTimeString([], {
+  const startTimeStr = newStart.toLocaleTimeString("en-NG", {
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
+    timeZone: "Africa/Lagos",
   });
-  const endTimeStr = newEnd.toLocaleTimeString([], {
+  const endTimeStr = newEndtoLocaleTimeString("en-NG", {
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
+    timeZone: "Africa/Lagos",
   });
   const lectureDate = newStart.toLocaleDateString();
 
