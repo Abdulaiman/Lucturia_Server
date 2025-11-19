@@ -12,6 +12,7 @@ const {
   sendWhatsAppMessage,
   sendStudentClassConfirmedSmart,
   sendStudentClassCancelledSmart,
+  sendStudentClassRescheduledSmart,
 } = require("../services/whatsapp");
 const { getFirstName } = require("../../utils/helpers");
 
@@ -294,7 +295,6 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
           note: "Rescheduled by your class rep.",
         });
       } else if (oldStatus !== "Confirmed" && newStatus === "Confirmed") {
-        await sendStudentClassConfirmedSmart;
         sendStudentClassConfirmedSmart({
           to: student.whatsappNumber,
           studentName: getFirstName(student.fullName),
