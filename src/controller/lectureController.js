@@ -266,7 +266,7 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
     hour12: false,
     timeZone: "Africa/Lagos",
   });
-  const endTimeStr = newEndtoLocaleTimeString("en-NG", {
+  const endTimeStr = newEnd.toLocaleTimeString("en-NG", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
