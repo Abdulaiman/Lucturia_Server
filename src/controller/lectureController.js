@@ -6,9 +6,6 @@ const catchAsync = require("../../utils/catch-async"); // adapt to your helper
 const AppError = require("../../utils/app-error");
 const {
   sendLecturerWelcomeTemplate,
-  sendStudentClassCancelled,
-  sendStudentClassRescheduled,
-  sendStudentClassConfirmed,
   sendWhatsAppMessage,
   sendStudentClassConfirmedSmart,
   sendStudentClassCancelledSmart,
@@ -91,9 +88,6 @@ exports.createLecture = catchAsync(async (req, res, next) => {
     lectures.push(lecture);
   }
 
-  // ✅ Send lecturer welcome template only once per lecturer
-  //    Exclude ALL lectures created in this request so the existence check
-  //    only considers previously stored documents.
   if (lecturerWhatsapp && lectures.length > 0) {
     const createdIds = lectures.map((l) => l._id);
     const alreadyExists = await Lecture.exists({

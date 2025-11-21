@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 const userSchema = new mongoose.Schema(
   {
     fullName: { type: String, trim: true },
-    regNumber: { type: String, unique: true },
+    regNumber: { type: String },
     whatsappNumber: {
       type: String,
       unique: true,
