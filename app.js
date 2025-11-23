@@ -2,8 +2,6 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
-const mongoSanitize = require("express-mongo-sanitize");
-const xss = require("xss-clean");
 const hpp = require("hpp");
 
 const { globalErrorHandler } = require("./src/controller/errorController");
@@ -36,11 +34,32 @@ app.use('/api', limiter);
 // Body parser, reading data from body into req.body
 app.use(express.json({ limit: '10kb' }));
 
-// Data sanitization against NoSQL query injection
-app.use(mongoSanitize());
+app.use((req, res, next) => {
+  const sanitize = (obj) => {
+    if (obj instanceof Object) {
+      for (const key in obj) {
+        if (/^\$/.test(key)) {
+          delete obj[key];
+        } else {
+          sanitize(obj[key]);
+        }
+      }
+    }
+    return obj;
+  };
 
-// Data sanitization against XSS
-app.use(xss());
+  if (req.body) req.body = sanitize(req.body);
+  if (req.query) {
+    // In Express 5, req.query is a getter, so we can't reassign it directly or modify it easily if it's immutable.
+    // However, the object returned by the getter is usually mutable.
+    // Let's try to sanitize the properties of the object returned by req.query
+    const query = req.query;
+    sanitize(query);
+  }
+  if (req.params) req.params = sanitize(req.params);
+
+  next();
+});
 
 // Prevent parameter pollution
 app.use(hpp());
@@ -58,7 +77,7 @@ app.use("/", webhookRouter);
 // Catch-all for 404
 
 app.use((req, res, next) =>
-  next(new AppError(`can't find ${req.originalUrl} on this server`))
+  next(new AppError(`can't find ${req.originalUrl} on this server`, 404))
 );
 
 app.use(globalErrorHandler);
