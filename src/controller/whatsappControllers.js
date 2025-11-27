@@ -1007,7 +1007,7 @@ async function handleClassRepBroadcast(message) {
 
   // Never broadcast exact 'summary'
   if (
-    textTrim.toLowerCase() === "summary" ||
+    textTrim.toLowerCase() === "schedule" ||
     textTrim.toLowerCase() === "got it" ||
     textTrim.toLowerCase() === "no" ||
     textTrim.toLowerCase() === "yes" ||

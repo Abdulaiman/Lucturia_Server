@@ -85,7 +85,7 @@ exports.handleWebhook = async (req, res, next) => {
               await handleOnboardingFlow(message);
               continue;
             }
-            if (bodyText && bodyText.toLowerCase() === "summary") {
+            if (bodyText && bodyText.toLowerCase() === "schedule") {
               await handleStudentKeywordSummary(message); // idempotent by inbound WAMID
               continue; // stop other handlers, including class-rep broadcast
             }
