@@ -1060,7 +1060,12 @@ async function handleClassRepBroadcast(message) {
       student.whatsappNumber === rep.whatsappNumber
     )
       continue;
-    await sendWhatsAppText({ to: student.whatsappNumber, text: payload });
+    await sendWhatsAppText({ to: student.whatsappNumber, text: payload, buttons: [
+      {
+        id: "Got_it",
+        title: "Got it",
+      },
+    ], });
   }
 
   await sendWhatsAppText({
