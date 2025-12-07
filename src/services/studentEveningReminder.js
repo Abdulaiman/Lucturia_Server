@@ -25,7 +25,7 @@ function getFirstName(fullName) {
 }
 
 const studentEveningReminderJob = cron.schedule(
-  "00 18 * * *", // 6 PM
+  "00 19 * * *", // 6 PM
   async () => {
     console.log("📤 Running student evening (tomorrow) reminder job...");
 
