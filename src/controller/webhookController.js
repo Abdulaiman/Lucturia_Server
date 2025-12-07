@@ -70,12 +70,27 @@ exports.handleWebhook = async (req, res, next) => {
           // 0) Exact keyword: "summary" (case-insensitive)
           if (message.type === "text") {
             const bodyText = (message.text?.body || "").trim();
+            const local = toLocalMsisdn(message.from);
 
             if (bodyText.startsWith("join_")) {
               await handleJoinClass(message);
               continue;
             }
-            const local = toLocalMsisdn(message.from);
+
+            // 0a) PRIORITY: If lecturer has a pending contribution, handle it FIRST (before onboarding)
+            const pending = await PendingAction.findOne({
+              lecturerWhatsapp: local,
+              status: "pending",
+            }).sort({ createdAt: -1 });
+            
+            console.log(`🔍 Checking pending action for ${local}: ${pending ? 'FOUND' : 'NOT FOUND'}`);
+            if (pending) {
+              console.log(`✅ Pending action found: ${pending.action} for lecture ${pending.lecture}`);
+              await handleLecturerContribution(message); // idempotent by inbound WAMID
+              continue; // ensures only one handler claims this WAMID
+            }
+
+            // 0b) Check onboarding (only if no pending action)
             const user = await User.findOne({ whatsappNumber: local });
             if (
               user &&
@@ -85,22 +100,13 @@ exports.handleWebhook = async (req, res, next) => {
               await handleOnboardingFlow(message);
               continue;
             }
+            
             if (bodyText && bodyText.toLowerCase() === "schedule") {
               await handleStudentKeywordSummary(message); // idempotent by inbound WAMID
               continue; // stop other handlers, including class-rep broadcast
             }
 
-            // 0a) If lecturer has a pending contribution, handle it and stop
-            const pending = await PendingAction.findOne({
-              lecturerWhatsapp: local,
-              status: "pending",
-            }).sort({ createdAt: -1 });
-            if (pending) {
-              await handleLecturerContribution(message); // idempotent by inbound WAMID
-              continue; // ensures only one handler claims this WAMID
-            }
-
-            // 0b) Otherwise, allow class rep broadcast (no-op if sender isn't a rep)
+            // 0c) Otherwise, allow class rep broadcast (no-op if sender isn't a rep)
             await handleClassRepBroadcast(message); // idempotent by inbound WAMID after role check
           }
 
@@ -127,6 +133,21 @@ exports.handleWebhook = async (req, res, next) => {
           // 3) Document messages — could be from lecturer or class rep
           if (message.type === "document") {
             const local = toLocalMsisdn(message.from);
+            
+            // PRIORITY: Check if lecturer has a pending add_document action
+            const pending = await PendingAction.findOne({
+              lecturerWhatsapp: local,
+              status: "pending",
+              action: { $in: ["add_document", "awaiting_choice"] }
+            }).sort({ createdAt: -1 });
+            
+            if (pending) {
+              console.log(`✅ Document pending action found for ${local}: ${pending.action}`);
+              await handleLecturerContribution(message);
+              continue;
+            }
+            
+            // Otherwise check if class rep
             const sender = await User.findOne({ whatsappNumber: local }).select(
               "role"
             );

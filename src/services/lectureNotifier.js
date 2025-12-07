@@ -11,7 +11,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const lectureNotifierJob = cron.schedule(
-  "00 18 * * *", // ⏰ 7:30 PM Africa/Lagos
+  "47 16 * * *", // ⏰ 7:30 PM Africa/Lagos
   async () => {
     console.log("📤 Running lecture notification job...");
 
@@ -47,28 +47,48 @@ const lectureNotifierJob = cron.schedule(
           continue;
         }
 
-        if (!lecture.lecturerWhatsapp) continue;
-
-        try {
-          await sendLecturerClassNotification({
-            to: lecture.lecturerWhatsapp,
-            lecturerName: lecture.lecturer,
-            course: lecture.course,
-            classId: lecture.class._id.toString(),
-            startTime: dayjs(lecture.startTime)
-              .tz("Africa/Lagos")
-              .format("HH:mm"),
-            endTime: dayjs(lecture.endTime).tz("Africa/Lagos").format("HH:mm"),
-            location: lecture.location || "TBA",
-            lectureId: lecture.id,
-          });
-
-          console.log(`✅ Notified ${lecture.lecturer}`);
-        } catch (err) {
-          console.error(
-            `⚠️ Failed to notify ${lecture.lecturer}:`,
-            err.message
+        // Get lecturers to notify (support both old and new format)
+        let lecturersToNotify = [];
+        if (lecture.lecturers && lecture.lecturers.length > 0) {
+          // New format: lecturers array
+          lecturersToNotify = lecture.lecturers.filter(
+            (l) => l.whatsapp && l.response === "pending"
           );
+        } else if (lecture.lecturerWhatsapp) {
+          // Old format: single lecturer (backward compat)
+          lecturersToNotify = [
+            { name: lecture.lecturer, whatsapp: lecture.lecturerWhatsapp },
+          ];
+        }
+
+        if (lecturersToNotify.length === 0) {
+          console.log(`ℹ️ No lecturers to notify for ${lecture.course}`);
+          continue;
+        }
+
+        // Notify ALL lecturers
+        for (const lec of lecturersToNotify) {
+          try {
+            await sendLecturerClassNotification({
+              to: lec.whatsapp,
+              lecturerName: lec.name,
+              course: lecture.course,
+              classId: lecture.class._id.toString(),
+              startTime: dayjs(lecture.startTime)
+                .tz("Africa/Lagos")
+                .format("HH:mm"),
+              endTime: dayjs(lecture.endTime).tz("Africa/Lagos").format("HH:mm"),
+              location: lecture.location || "TBA",
+              lectureId: lecture.id,
+            });
+
+            console.log(`✅ Notified ${lec.name} for ${lecture.course}`);
+          } catch (err) {
+            console.error(
+              `⚠️ Failed to notify ${lec.name}:`,
+              err.message
+            );
+          }
         }
       }
     } catch (err) {

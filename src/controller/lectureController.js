@@ -30,8 +30,9 @@ function formatLagosTime(date) {
 exports.createLecture = catchAsync(async (req, res, next) => {
   const {
     course,
-    lecturer,
-    lecturerWhatsapp, // ✅ lecturer WhatsApp number
+    lecturer, // DEPRECATED: single lecturer name
+    lecturerWhatsapp, // DEPRECATED: single lecturer phone
+    lecturers, // NEW: array of { name, whatsapp }
     startTime,
     endTime,
     location,
@@ -44,10 +45,39 @@ exports.createLecture = catchAsync(async (req, res, next) => {
 
   // Validate required fields
   if (!classId) return next(new AppError("classId (class) is required", 400));
-  if (!course || !lecturer || !startTime || !endTime) {
+  if (!course || !startTime || !endTime) {
     return next(
-      new AppError("course, lecturer, startTime and endTime are required", 400)
+      new AppError("course, startTime and endTime are required", 400)
     );
+  }
+
+  // Build lecturers array (support both old and new format)
+  let lecturersArray = [];
+  if (lecturers && Array.isArray(lecturers) && lecturers.length > 0) {
+    // New format: array of lecturer objects (only name is required, whatsapp is optional)
+    lecturersArray = lecturers
+      .filter((l) => l.name) // Only require name, whatsapp is optional
+      .slice(0, 3) // Max 3 lecturers
+      .map((l) => ({
+        name: l.name,
+        whatsapp: l.whatsapp || "",
+        response: "pending",
+        reminderSent: false,
+      }));
+  } else if (lecturer) {
+    // Old format: single lecturer (backward compatibility)
+    lecturersArray = [
+      {
+        name: lecturer,
+        whatsapp: lecturerWhatsapp || "",
+        response: "pending",
+        reminderSent: false,
+      },
+    ];
+  }
+
+  if (lecturersArray.length === 0) {
+    return next(new AppError("At least one lecturer is required", 400));
   }
 
   const start = new Date(startTime);
@@ -59,7 +89,7 @@ exports.createLecture = catchAsync(async (req, res, next) => {
   const occurrences = Math.max(1, repeat ? parseInt(weeks || 1, 10) : 1);
   const lectures = [];
 
-  // 🔹 Fetch class so we can use its title later
+  // Fetch class so we can use its title later
   const classDoc = await Class.findById(classId);
   if (!classDoc) {
     return next(new AppError("Class not found", 404));
@@ -75,8 +105,11 @@ exports.createLecture = catchAsync(async (req, res, next) => {
 
     const lecture = await Lecture.create({
       course,
-      lecturer,
-      lecturerWhatsapp,
+      // Deprecated fields (for backward compat)
+      lecturer: lecturersArray[0]?.name,
+      lecturerWhatsapp: lecturersArray[0]?.whatsapp,
+      // New multi-lecturer array
+      lecturers: lecturersArray,
       startTime: newStart,
       endTime: newEnd,
       location,
@@ -88,23 +121,25 @@ exports.createLecture = catchAsync(async (req, res, next) => {
     lectures.push(lecture);
   }
 
-  if (lecturerWhatsapp && lectures.length > 0) {
+  // Send welcome to all new lecturers
+  for (const lec of lecturersArray) {
+    if (!lec.whatsapp) continue;
+    
     const createdIds = lectures.map((l) => l._id);
     const alreadyExists = await Lecture.exists({
-      lecturerWhatsapp,
-      _id: { $nin: createdIds }, // exclude the whole current batch
+      "lecturers.whatsapp": lec.whatsapp,
+      _id: { $nin: createdIds },
     });
 
     if (!alreadyExists) {
       try {
         await sendLecturerWelcomeTemplate(
-          lecturerWhatsapp,
-          lecturer, // 👈 goes into {{name}}
-          classDoc.title // 👈 use class title instead of course
+          lec.whatsapp,
+          lec.name,
+          classDoc.title
         );
       } catch (err) {
-        console.error("⚠️ Failed to send lecturer welcome:", err.message);
-        // do not block lecture creation if message fails
+        console.error(`⚠️ Failed to send lecturer welcome to ${lec.name}:`, err.message);
       }
     }
   }
@@ -182,6 +217,9 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
   const lecture = await Lecture.findById(req.params.id);
   if (!lecture) return next(new AppError("Lecture not found", 404));
 
+  // Extract notifyClass flag (default to true for backward compatibility)
+  const { notifyClass = true, ...updateData } = req.body;
+
   // Store old values
   const oldStart = new Date(lecture.startTime);
   const oldEnd = new Date(lecture.endTime);
@@ -190,8 +228,8 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
   const oldCourse = lecture.course;
   const oldLecturer = lecture.lecturer;
 
-  // Apply incoming changes
-  Object.assign(lecture, req.body);
+  // Apply incoming changes (excluding notifyClass)
+  Object.assign(lecture, updateData);
 
   const newStart = new Date(lecture.startTime);
   const newEnd = new Date(lecture.endTime);
@@ -210,6 +248,15 @@ exports.updateLecture = catchAsync(async (req, res, next) => {
 
   // Save lecture first
   await lecture.save();
+
+  // If notifyClass is explicitly false, skip all notifications
+  if (notifyClass === false) {
+    return res.status(200).json({
+      status: "success",
+      data: lecture,
+      message: "Lecture updated. Notifications skipped by user choice.",
+    });
+  }
 
   // If only lecturer/course changed, skip notifications
   if (onlyCourseOrLecturerChanged) {
@@ -343,9 +390,9 @@ exports.remindLecturer = catchAsync(async (req, res, next) => {
   const lecture = await Lecture.findById(lectureId);
   if (!lecture) return next(new AppError("Lecture not found", 404));
 
-  // Enforce one reminder per lecture
-  if (lecture.reminder?.sent) {
-    return next(new AppError("Reminder already sent for this lecture", 409));
+  // Don't remind if lecture is already locked (confirmed)
+  if (lecture.locked) {
+    return next(new AppError("Lecture already confirmed, no reminder needed", 400));
   }
 
   // Guard: only allow for lectures scheduled today (Africa/Lagos)
@@ -361,68 +408,99 @@ exports.remindLecturer = catchAsync(async (req, res, next) => {
   const classDoc = await Class.findById(lecture.class);
   if (!classDoc) return next(new AppError("Class not found for lecture", 404));
 
-  const lecturerWhatsapp = lecture.lecturerWhatsapp;
-  if (!lecturerWhatsapp)
-    return next(new AppError("Lecturer WhatsApp not set", 400));
-
   const startTime = formatLagosTime(lecture.startTime);
   const endTime = formatLagosTime(lecture.endTime);
   const classTitle = classDoc.title;
 
-  let delivery = null;
+  // Get lecturers to remind (support both old and new format)
+  let lecturersToRemind = [];
+  if (lecture.lecturers && lecture.lecturers.length > 0) {
+    // New format: filter to those who haven't been reminded and haven't responded
+    lecturersToRemind = lecture.lecturers.filter(
+      (l) => l.whatsapp && !l.reminderSent && l.response === "pending"
+    );
+  } else if (lecture.lecturerWhatsapp && !lecture.reminder?.sent) {
+    // Old format (backward compat)
+    lecturersToRemind = [{ name: lecture.lecturer, whatsapp: lecture.lecturerWhatsapp }];
+  }
 
-  // Try session message if explicitly requested
-  if (mode === "session") {
-    try {
-      await sendWhatsAppText({
-        to: lecturerWhatsapp,
-        text: `⏰ Reminder: students for ${lecture.course} are awaiting your response. Please confirm or reschedule.`,
-        buttons: [
-          { id: "yes", title: "✅ Yes" },
-          { id: "no", title: "❌ No" },
-          { id: "reschedule", title: "📅 Reschedule" },
-        ],
-      });
-      delivery = "session";
-    } catch (e) {
-      // fall back to template below
+  if (lecturersToRemind.length === 0) {
+    return next(new AppError("No lecturers to remind (already reminded or responded)", 409));
+  }
+
+  let deliveryCount = 0;
+  const deliveryResults = [];
+
+  for (const lec of lecturersToRemind) {
+    let delivery = null;
+
+    // Try session message if explicitly requested
+    if (mode === "session") {
+      try {
+        await sendWhatsAppText({
+          to: lec.whatsapp,
+          text: `⏰ Reminder: students for ${lecture.course} are awaiting your response. Please confirm or reschedule.`,
+          buttons: [
+            { id: "yes", title: "✅ Yes" },
+            { id: "no", title: "❌ No" },
+            { id: "reschedule", title: "📅 Reschedule" },
+          ],
+        });
+        delivery = "session";
+      } catch (e) {
+        // fall back to template below
+      }
+    }
+
+    // If session not used or failed, send template
+    if (!delivery && (mode === "template" || mode === "auto")) {
+      try {
+        await sendLecturerReminderTemplate({
+          to: lec.whatsapp,
+          lecturerName: lec.name,
+          course: lecture.course,
+          classTitle,
+          startTime,
+          endTime,
+          location: lecture.location,
+        });
+        delivery = "template";
+      } catch (err) {
+        console.error(`⚠️ Failed to remind ${lec.name}:`, err.message);
+      }
+    }
+
+    if (delivery) {
+      deliveryCount++;
+      deliveryResults.push({ name: lec.name, delivery });
+      
+      // Mark this lecturer as reminded (new format)
+      if (lecture.lecturers && lecture.lecturers.length > 0) {
+        const idx = lecture.lecturers.findIndex((l) => l.whatsapp === lec.whatsapp);
+        if (idx >= 0) {
+          lecture.lecturers[idx].reminderSent = true;
+        }
+      }
     }
   }
 
-  // If session not used or failed, send template (outside window)
-  if (!delivery && (mode === "template" || mode === "auto")) {
-    await sendLecturerReminderTemplate({
-      to: lecturerWhatsapp,
-      lecturerName: lecture.lecturer,
-      course: lecture.course,
-      classTitle,
-      startTime,
-      endTime,
-      location: lecture.location,
-    });
-    delivery = "template";
-  }
-
-  if (!delivery) {
+  if (deliveryCount === 0) {
     return next(
-      new AppError(
-        "Failed to send reminder (session blocked and template disabled)",
-        500
-      )
+      new AppError("Failed to send reminder to any lecturer", 500)
     );
   }
 
-  // Mark reminder as sent after successful delivery
+  // Mark global reminder as sent (for backward compat)
   lecture.reminder = {
     sent: true,
     sentAt: new Date(),
-    sentVia: delivery,
+    sentVia: mode,
   };
   await lecture.save();
 
   return res.status(200).json({
     status: "success",
-    data: { lectureId, delivery },
+    data: { lectureId, remindedCount: deliveryCount, results: deliveryResults },
   });
 });
 

@@ -1113,9 +1113,24 @@ async function sendLecturerUpdateDocumentTemplate({
 // }
 
 async function notifyStudentsOfContribution(lecture, action, content) {
+  console.log(`📢 notifyStudentsOfContribution called: action=${action}, lecture.class=${lecture.class}, lecture.course=${lecture.course}`);
+  
+  if (!lecture.class) {
+    console.error("❌ notifyStudentsOfContribution: lecture.class is missing!");
+    return;
+  }
+  
   const students = await User.find({ class: lecture.class }).select(
     "whatsappNumber fullName"
   );
+  
+  console.log(`📢 Found ${students.length} students in class ${lecture.class}`);
+  
+  if (students.length === 0) {
+    console.log("⚠️ No students found for this class, skipping notifications");
+    return;
+  }
+  
   const tasks = [];
 
   for (const student of students) {

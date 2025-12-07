@@ -46,7 +46,7 @@ function toLocalMsisdn(waId) {
 module.exports = function buildScheduleText(student, lectures, targetDate) {
   const firstName = getFirstName(student.fullName);
 
-  let scheduleText = `📚 Hello ${firstName}, here’s your schedule for ${formatLagosDate(
+  let scheduleText = `📚 Hello ${firstName}, here's your schedule for ${formatLagosDate(
     targetDate
   )}:\n\n`;
 
@@ -55,6 +55,22 @@ module.exports = function buildScheduleText(student, lectures, targetDate) {
   lectures.forEach((lec, i) => {
     const start = formatLagosTime(lec.startTime);
     const end = formatLagosTime(lec.endTime);
+    
+    // Build lecturer display: use confirmedBy if locked, otherwise show all lecturers
+    let lecturerDisplay = "TBA";
+    if (lec.confirmedBy) {
+      lecturerDisplay = lec.confirmedBy;
+    } else if (lec.lecturers && lec.lecturers.length > 0) {
+      const names = lec.lecturers.map(l => l.name).filter(Boolean);
+      if (names.length === 1) {
+        lecturerDisplay = names[0];
+      } else if (names.length > 1) {
+        lecturerDisplay = names.join(" / ");
+      }
+    } else if (lec.lecturer) {
+      // Fallback for old format
+      lecturerDisplay = lec.lecturer;
+    }
 
     if (classNotifies) {
       const status = (lec.status || "").toLowerCase();
@@ -68,13 +84,9 @@ module.exports = function buildScheduleText(student, lectures, targetDate) {
         )} (${start}-${end})`;
       }
 
-      scheduleText += `${i + 1}. ${lec.course} by ${
-        lec.lecturer
-      } (${start}-${end}) — ${text}\n`;
+      scheduleText += `${i + 1}. ${lec.course} by ${lecturerDisplay} (${start}-${end}) — ${text}\n`;
     } else {
-      scheduleText += `${i + 1}. ${lec.course} by ${
-        lec.lecturer
-      } (${start}-${end})\n`;
+      scheduleText += `${i + 1}. ${lec.course} by ${lecturerDisplay} (${start}-${end})\n`;
     }
   });
 
@@ -82,7 +94,7 @@ module.exports = function buildScheduleText(student, lectures, targetDate) {
 };
 async function buildScheduleText(student, lectures, targetDate) {
   const firstName = getFirstName(student.fullName);
-  let scheduleText = `📚 Hello ${firstName}, here’s your schedule for ${formatLagosDate(
+  let scheduleText = `📚 Hello ${firstName}, here's your schedule for ${formatLagosDate(
     targetDate
   )}:\n\n`;
 
@@ -91,6 +103,22 @@ async function buildScheduleText(student, lectures, targetDate) {
   lectures.forEach((lec, i) => {
     const start = formatLagosTime(lec.startTime);
     const end = formatLagosTime(lec.endTime);
+    
+    // Build lecturer display: use confirmedBy if locked, otherwise show all lecturers
+    let lecturerDisplay = "TBA";
+    if (lec.confirmedBy) {
+      lecturerDisplay = lec.confirmedBy;
+    } else if (lec.lecturers && lec.lecturers.length > 0) {
+      const names = lec.lecturers.map(l => l.name).filter(Boolean);
+      if (names.length === 1) {
+        lecturerDisplay = names[0];
+      } else if (names.length > 1) {
+        lecturerDisplay = names.join(" / ");
+      }
+    } else if (lec.lecturer) {
+      // Fallback for old format
+      lecturerDisplay = lec.lecturer;
+    }
 
     if (classSendsLecturerNotifications) {
       const status = (lec.status || "").toLowerCase();
@@ -102,13 +130,9 @@ async function buildScheduleText(student, lectures, targetDate) {
         statusText = `🔄 Rescheduled to ${newDate} (${start}-${end})`;
       }
 
-      scheduleText += `${i + 1}. ${lec.course} by ${
-        lec.lecturer
-      } (${start}-${end}) - ${statusText}\n`;
+      scheduleText += `${i + 1}. ${lec.course} by ${lecturerDisplay} (${start}-${end}) - ${statusText}\n`;
     } else {
-      scheduleText += `${i + 1}. ${lec.course} by ${
-        lec.lecturer
-      } (${start}-${end})\n`;
+      scheduleText += `${i + 1}. ${lec.course} by ${lecturerDisplay} (${start}-${end})\n`;
     }
   });
 
@@ -247,6 +271,19 @@ async function handleLecturerButton(message) {
   );
   if (!lecture) return;
 
+  // Get responding lecturer's phone (normalized)
+  const respondingPhone = toLocalMsisdn(message.from);
+  
+  // Find this lecturer in the lecturers array
+  const respondingLecturer = lecture.findLecturerByPhone
+    ? lecture.findLecturerByPhone(respondingPhone)
+    : null;
+  
+  // Fallback for old format (single lecturer)
+  const isOldFormat = !lecture.lecturers || lecture.lecturers.length === 0;
+  const lecturerWhatsapp = isOldFormat ? lecture.lecturerWhatsapp : respondingLecturer?.whatsapp;
+  const lecturerName = isOldFormat ? lecture.lecturer : respondingLecturer?.name;
+
   // 4) Map to desired status/action (explicit state transition)
   const desired =
     lower === "yes"
@@ -259,8 +296,10 @@ async function handleLecturerButton(message) {
 
   // 5) Handle action-type branches first (add note / add document / no more)
   if (lower.includes("add note")) {
+    console.log(`📝 Add Note clicked. Storing pending action for lecturerWhatsapp: ${lecturerWhatsapp}`);
+    
     await PendingAction.updateMany(
-      { lecturerWhatsapp: lecture.lecturerWhatsapp, status: "pending" },
+      { lecturerWhatsapp: lecturerWhatsapp, status: "pending" },
       { $set: { active: false } }
     );
 
@@ -268,7 +307,7 @@ async function handleLecturerButton(message) {
       { waMessageId: triggerId },
       {
         $set: {
-          lecturerWhatsapp: lecture.lecturerWhatsapp,
+          lecturerWhatsapp: lecturerWhatsapp,
           lecture: lecture._id,
           action: "add_note",
           status: "pending",
@@ -278,8 +317,10 @@ async function handleLecturerButton(message) {
       { upsert: true, new: true }
     );
 
+    console.log(`✅ PendingAction created/updated for add_note, lecturerWhatsapp: ${lecturerWhatsapp}`);
+
     await sendWhatsAppText({
-      to: lecture.lecturerWhatsapp,
+      to: lecturerWhatsapp,
       text: "✍️ Please type the note for this lecture.",
     });
     return;
@@ -287,7 +328,7 @@ async function handleLecturerButton(message) {
 
   if (lower.includes("add document")) {
     await PendingAction.updateMany(
-      { lecturerWhatsapp: lecture.lecturerWhatsapp, status: "pending" },
+      { lecturerWhatsapp: lecturerWhatsapp, status: "pending" },
       { $set: { active: false } }
     );
 
@@ -295,7 +336,7 @@ async function handleLecturerButton(message) {
       { waMessageId: triggerId },
       {
         $set: {
-          lecturerWhatsapp: lecture.lecturerWhatsapp,
+          lecturerWhatsapp: lecturerWhatsapp,
           lecture: lecture._id,
           action: "add_document",
           status: "pending",
@@ -306,7 +347,7 @@ async function handleLecturerButton(message) {
     );
 
     await sendWhatsAppText({
-      to: lecture.lecturerWhatsapp,
+      to: lecturerWhatsapp,
       text: "📄 Please upload the document file for this lecture.",
     });
     return;
@@ -323,73 +364,135 @@ async function handleLecturerButton(message) {
       await pending.save();
     }
     await sendWhatsAppText({
-      to: lecture.lecturerWhatsapp,
+      to: lecturerWhatsapp,
       text: "👌 Got it. No extra notes or documents will be added.",
     });
     return;
   }
 
-  // 6) Initial decision transitions (Confirmed/Cancelled/Rescheduled)
-  let status = "";
-  let notifyFn = null;
-
-  if (desired) {
-    if (lecture.status !== desired) {
-      if (desired === "Confirmed") {
-        lecture.status = "Confirmed";
-        status = "Confirmed ✅";
-        notifyFn = sendStudentClassConfirmed;
-
-        await sendLecturerFollowUp({
-          to: lecture.lecturerWhatsapp,
-          lectureId: lecture._id,
-        });
-      } else if (desired === "Cancelled") {
-        lecture.status = "Cancelled";
-        status = "Cancelled ❌";
-        notifyFn = sendStudentClassCancelled;
-
-        await sendLecturerCancelNotePrompt({
-          to: lecture.lecturerWhatsapp,
-          lectureId: lecture._id,
-        });
-      } else if (desired === "Rescheduled") {
-        lecture.status = "Rescheduled";
-        status = "Rescheduled 📅";
-      }
-    } else {
-      await sendWhatsAppText({
-        to: lecture.lecturerWhatsapp,
-        text: `ℹ️ Already ${lecture.status}.`,
-      });
-      return;
-    }
-  } else {
+  // ========================================
+  // 6) MULTI-LECTURER PRIORITY LOGIC
+  // ========================================
+  
+  // Check if lecture is already locked (someone said YES)
+  if (lecture.locked && desired) {
+    await sendWhatsAppText({
+      to: lecturerWhatsapp,
+      text: `ℹ️ This class has already been ${lecture.status.toLowerCase()} by ${lecture.confirmedBy || "another lecturer"}.`,
+    });
     return;
   }
 
-  // 7) Save lecture updates
-  await lecture.save();
+  // Handle YES (highest priority - locks the lecture)
+  if (desired === "Confirmed") {
+    // Update lecturer's response in array (if multi-lecturer)
+    if (respondingLecturer) {
+      respondingLecturer.response = "yes";
+      respondingLecturer.respondedAt = new Date();
+    }
+    
+    // Lock the lecture and confirm
+    lecture.status = "Confirmed";
+    lecture.locked = true;
+    lecture.confirmedBy = lecturerName;
+    
+    await lecture.save();
 
-  // 8) Notify students once per transition
-  if (notifyFn) {
+    // Send follow-up to confirming lecturer
+    await sendLecturerFollowUp({
+      to: lecturerWhatsapp,
+      lectureId: lecture._id,
+    });
+
+    // Notify students
     const students = await User.find({ class: lecture.class._id }).select(
       "whatsappNumber fullName"
     );
 
-    // Use smart functions that auto-detect sessions
     for (const student of students) {
-      if (desired === "Confirmed") {
-        await sendStudentClassConfirmedSmart({
-          to: student.whatsappNumber,
-          studentName: getFirstName(student.fullName),
-          course: lecture.course,
-          lecturerName: lecture.lecturer,
-          startTime: formatTime(lecture.startTime),
-          endTime: formatTime(lecture.endTime),
-          location: lecture.location,
+      await sendStudentClassConfirmedSmart({
+        to: student.whatsappNumber,
+        studentName: getFirstName(student.fullName),
+        course: lecture.course,
+        lecturerName: lecturerName, // Use the confirming lecturer's name
+        startTime: formatTime(lecture.startTime),
+        endTime: formatTime(lecture.endTime),
+        location: lecture.location,
+      });
+    }
+    
+    console.log(`✅ Lecture confirmed by ${lecturerName}, ${students.length} students notified.`);
+    return;
+  }
+
+  // Handle NO (only affects this lecturer, may cancel if ALL say no)
+  if (desired === "Cancelled") {
+    // Update lecturer's response in array (if multi-lecturer)
+    if (respondingLecturer) {
+      respondingLecturer.response = "no";
+      respondingLecturer.respondedAt = new Date();
+      await lecture.save();
+
+      // Check if ALL lecturers have said NO
+      const allDeclined = lecture.allLecturersDeclined
+        ? lecture.allLecturersDeclined()
+        : true;
+
+      if (allDeclined) {
+        // All lecturers declined - cancel the class
+        lecture.status = "Cancelled";
+        await lecture.save();
+
+        // Notify the declining lecturer
+      
+        // Prompt for cancellation note
+        await sendLecturerCancelNotePrompt({
+          to: lecturerWhatsapp,
+          lectureId: lecture._id,
         });
-      } else if (desired === "Cancelled") {
+
+        // Notify students
+        const students = await User.find({ class: lecture.class._id }).select(
+          "whatsappNumber fullName"
+        );
+
+        for (const student of students) {
+          await sendStudentClassCancelledSmart({
+            to: student.whatsappNumber,
+            studentName: getFirstName(student.fullName),
+            course: lecture.course,
+            lecturerName: lecture.lecturer,
+            startTime: formatTime(lecture.startTime),
+            endTime: formatTime(lecture.endTime),
+            location: lecture.location,
+          });
+        }
+        
+        console.log(`❌ All lecturers declined. Lecture cancelled, ${students.length} students notified.`);
+      } else {
+        // Not all declined - just acknowledge this lecturer's unavailability
+        await sendWhatsAppText({
+          to: lecturerWhatsapp,
+          text: "📝 Noted. We're waiting for other lecturers to respond.",
+        });
+        console.log(`📝 ${lecturerName} declined. Waiting for other lecturers.`);
+      }
+    } else {
+      // Old format (single lecturer) - cancel immediately
+      lecture.status = "Cancelled";
+      await lecture.save();
+
+      await sendLecturerCancelNotePrompt({
+        to: lecturerWhatsapp,
+        lectureId: lecture._id,
+      });
+
+      // Notify students
+      const students = await User.find({ class: lecture.class._id }).select(
+        "whatsappNumber fullName"
+      );
+
+      for (const student of students) {
         await sendStudentClassCancelledSmart({
           to: student.whatsappNumber,
           studentName: getFirstName(student.fullName),
@@ -401,6 +504,23 @@ async function handleLecturerButton(message) {
         });
       }
     }
+    return;
+  }
+
+  // Handle Reschedule
+  if (desired === "Rescheduled") {
+    // Update lecturer's response in array (if multi-lecturer)
+    if (respondingLecturer) {
+      respondingLecturer.response = "reschedule";
+      respondingLecturer.respondedAt = new Date();
+    }
+    
+    lecture.status = "Rescheduled";
+    await lecture.save();
+    
+    // The flow popup for reschedule will handle notifying students
+    // after the lecturer submits new date/time
+    return;
   }
 }
 
@@ -409,8 +529,10 @@ async function handleLecturerButton(message) {
 async function sendContributionFollowUp({
   lecture,
   kind /* "note"|"document" */,
+  lecturerPhone, // NEW: phone of the lecturer who sent the contribution
 }) {
-  const to = lecture.lecturerWhatsapp;
+  // Use the responding lecturer's phone, fallback to deprecated field
+  const to = lecturerPhone || lecture.lecturerWhatsapp;
   const lectureId = lecture._id;
 
   // Configure button set based on what was just contributed
@@ -651,7 +773,7 @@ async function handleLecturerContribution(message) {
     }
 
     // Send interactive follow-up anchored to this lecture
-    await sendContributionFollowUp({ lecture, kind: "note" });
+    await sendContributionFollowUp({ lecture, kind: "note", lecturerPhone: waId });
     return; // done with text path
   } else if (effectiveAction === "add_document" && type === "document") {
     const exists =
@@ -675,7 +797,7 @@ async function handleLecturerContribution(message) {
       await notifyStudentsOfContribution(lecture, "add_document", content);
 
       // Send interactive follow-up anchored to this lecture
-      await sendContributionFollowUp({ lecture, kind: "document" });
+      await sendContributionFollowUp({ lecture, kind: "document", lecturerPhone: waId });
     } else {
       console.log(
         "ℹ️ No changes persisted due to duplication; notifying lecturer only."
