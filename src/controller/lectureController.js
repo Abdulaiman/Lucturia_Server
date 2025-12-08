@@ -94,6 +94,7 @@ exports.createLecture = catchAsync(async (req, res, next) => {
   if (!classDoc) {
     return next(new AppError("Class not found", 404));
   }
+  const combinedTitle = `${classDoc.title} of ${classDoc.institution}`;
 
   // Create lecture occurrences
   for (let i = 0; i < occurrences; i++) {
@@ -136,7 +137,7 @@ exports.createLecture = catchAsync(async (req, res, next) => {
         await sendLecturerWelcomeTemplate(
           lec.whatsapp,
           lec.name,
-          classDoc.title
+          combinedTitle
         );
       } catch (err) {
         console.error(`⚠️ Failed to send lecturer welcome to ${lec.name}:`, err.message);
