@@ -73,10 +73,10 @@ const studentEveningReminderJob = cron.schedule(
             ],
           });
         } else {
-          await sendScheduleReadyTemplate({
-            to: student.whatsappNumber,
-            studentName: firstName,
-          });
+          // await sendScheduleReadyTemplate({
+          //   to: student.whatsappNumber,
+          //   studentName: firstName,
+          // });
         }
 
         console.log(
