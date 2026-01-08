@@ -1151,14 +1151,14 @@ async function notifyStudentsOfContribution(lecture, action, content) {
       } else {
         // ❌ TEMPLATE - Must chunk and send parts
         // no session stop
-        // tasks.push(
-        //   sendLecturerUpdateNoteTemplate({
-        //     to: student.whatsappNumber,
-        //     course: lecture.course,
-        //     lecturerName: lecture.lecturer,
-        //     noteText: content, // already chunked/sanitized by caller
-        //   })
-        // );
+        tasks.push(
+          sendLecturerUpdateNoteTemplate({
+            to: student.whatsappNumber,
+            course: lecture.course,
+            lecturerName: lecture.lecturer,
+            noteText: content, // already chunked/sanitized by caller
+          })
+        );
       }
     } else if (action === "add_document") {
       // Check session for each student
@@ -1178,16 +1178,16 @@ async function notifyStudentsOfContribution(lecture, action, content) {
       } else {
         // ❌ TEMPLATE - Send via document template
         // no session stop
-        // tasks.push(
-        //   sendLecturerUpdateDocumentTemplate({
-        //     to: student.whatsappNumber,
-        //     course: lecture.course,
-        //     lecturerName: lecture.lecturer,
-        //     sourceMediaId: content.waId,
-        //     filename: content.fileName,
-        //     mimeType: content.mimeType,
-        //   })
-        // );
+        tasks.push(
+          sendLecturerUpdateDocumentTemplate({
+            to: student.whatsappNumber,
+            course: lecture.course,
+            lecturerName: lecture.lecturer,
+            sourceMediaId: content.waId,
+            filename: content.fileName,
+            mimeType: content.mimeType,
+          })
+        );
       }
     }
   }
